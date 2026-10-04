@@ -13,7 +13,7 @@ Block Battle is a port of an internal game we already run (jpo-tetris, built for
 | Topic | Decision |
 |---|---|
 | Distribution | Claude Code plugin marketplace on GitHub |
-| Repos | `jpo-os/claude-games` (games + marketplace), `jpo-os/claude-games-server` (server) |
+| Repos | `jpo-oss/claude-games` (games + marketplace), `jpo-oss/claude-games-server` (server) |
 | License | MIT for both |
 | First game | Block Battle, plugin name `block-battle` |
 | Identity | GitHub device sign-in with no scopes |
@@ -61,7 +61,7 @@ A plugin install copies only its own folder, so games can't import from a shared
 Players install with:
 
 ```
-/plugin marketplace add jpo-os/claude-games
+/plugin marketplace add jpo-oss/claude-games
 /plugin install block-battle@claude-games
 ```
 
@@ -77,7 +77,7 @@ Everything the internal version has stays:
 
 What changes:
 
-- **Sign-in.** GitHub device flow, run entirely through `$.http.fetch`. The pane shows the code and `github.com/login/device`; the hooks module polls for the token. The OAuth app requests no scopes, so the token can only read the public profile. One OAuth app (owned by jpo-os) serves every server, since servers only use the token to ask GitHub who the player is. Device flow needs only the client ID, no secret ([GitHub docs](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)).
+- **Sign-in.** GitHub device flow, run entirely through `$.http.fetch`. The pane shows the code and `github.com/login/device`; the hooks module polls for the token. The OAuth app requests no scopes, so the token can only read the public profile. One OAuth app (owned by jpo-oss) serves every server, since servers only use the token to ask GitHub who the player is. Device flow needs only the client ID, no secret ([GitHub docs](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)).
 - **Server choice.** `userConfig.serverUrl`, defaulting to the official server. Each server has its own leaderboard.
 - **Offline.** Marathon works without a server. Battle and leaderboard show that the server is unreachable.
 - **Version check.** Every request sends the protocol version. The server answers 426 if it's too old, and the game tells the player to run `/plugin update`.
@@ -159,7 +159,7 @@ Friend rooms by code, sound, more games, desktop `Svg` rendering, signed commits
 
 ## Owner tasks
 
-- Create the `jpo-os` org and both repos.
+- Create both repos in the `jpo-oss` org.
 - Rent the Hetzner box and pick a domain, proxied through Cloudflare.
 - Register the GitHub OAuth app with device flow enabled.
 

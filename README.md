@@ -7,7 +7,7 @@ They run as Claude Code mods, in the terminal and in the Code tab of Claude Desk
 ## Install
 
 ```
-/plugin marketplace add jpo-os/claude-games
+/plugin marketplace add jpo-oss/claude-games
 /plugin install <game>@claude-games
 ```
 
@@ -19,7 +19,7 @@ Coming soon: Block Battle, a falling-block puzzle with solo Marathon and 1v1 bat
 
 ## Servers
 
-Online play goes through [claude-games-server](https://github.com/jpo-os/claude-games-server). Each game defaults to the official server, and you can point it at your own in the plugin's settings. Every server keeps its own leaderboard, so a team can run one for itself.
+Online play goes through [claude-games-server](https://github.com/jpo-oss/claude-games-server). Each game defaults to the official server, and you can point it at your own in the plugin's settings. Every server keeps its own leaderboard, so a team can run one for itself.
 
 ## A note on trust
 

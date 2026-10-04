@@ -11,7 +11,7 @@ For anything bigger than a small fix, open an issue first so we can agree on the
 You need Node (current LTS) and Claude Code.
 
 ```sh
-git clone https://github.com/jpo-os/claude-games
+git clone https://github.com/jpo-oss/claude-games
 cd claude-games
 claude --plugin-dir plugins/<game>
 ```

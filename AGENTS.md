@@ -2,7 +2,7 @@
 
 Multiplayer games that run inside Claude Code as mods. This repo is also the plugin marketplace: `.claude-plugin/marketplace.json` lists every game, and each game lives in `plugins/<name>/`.
 
-The game server is a separate repo, `jpo-os/claude-games-server`.
+The game server is a separate repo, `jpo-oss/claude-games-server`.
 
 ## Layout
 
