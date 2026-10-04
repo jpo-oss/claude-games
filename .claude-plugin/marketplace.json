@@ -1,0 +1,6 @@
+{
+  "name": "claude-games",
+  "owner": { "name": "JustPressOne Inc.", "email": "ansell@justpressone.com" },
+  "metadata": { "description": "Multiplayer games to play inside Claude Code while it works" },
+  "plugins": []
+}

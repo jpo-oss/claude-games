@@ -1,0 +1,23 @@
+name: Game proposal
+description: Suggest a new game
+labels: [game-proposal]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The game
+      description: How it plays, how long a round takes, how many players.
+    validations:
+      required: true
+  - type: textarea
+    id: online
+    attributes:
+      label: What the server does
+      description: Games talk to the server by polling a few times a second. Say what has to be shared between players.
+  - type: checkboxes
+    id: name
+    attributes:
+      label: Naming
+      options:
+        - label: The name isn't someone else's trademark
+          required: true
