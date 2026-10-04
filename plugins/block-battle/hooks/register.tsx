@@ -29,7 +29,8 @@ const view = atom({ plugin: 'block-battle', key: 'view' } as const, startView())
 
 const NO_TOKEN = 'Sign in with the GitHub CLI (gh auth login) to use the leaderboard and battles.'
 const DOWN = 'Game server unreachable. Solo play still works.'
-const DENIED = 'The server did not accept this GitHub sign-in (justpressone members only).'
+const SIGNED_OUT = 'Signed out. Pick Battle or Leaderboard to sign in again.'
+const OUTDATED = 'Block Battle is out of date. Run /plugin update block-battle@claude-games'
 
 const rt: {
   base: string
@@ -90,7 +91,8 @@ const setBattle = ($: EngineInterface, patch: Partial<Battle>) =>
 
 function noticeFor(r: { status: number; error: string }): string {
   if (r.status === 0) return DOWN
-  if (r.status === 401 || r.status === 403) return DENIED
+  if (r.status === 426) return OUTDATED
+  if (r.status === 401 || r.status === 403) return SIGNED_OUT
 
   return `Server said: ${r.error}`
 }

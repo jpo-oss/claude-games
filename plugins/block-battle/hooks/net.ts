@@ -8,14 +8,20 @@ export type Reply<T> = { ok: true; data: T } | { ok: false; status: number; erro
 
 export const MAX_INCOMING = 60
 
+export const PROTOCOL_VERSION = 1
+
 export function buildRequest(
   base: string,
   method: 'GET' | 'POST' | 'DELETE',
   path: string,
-  token: string,
+  token: string | null,
   body?: unknown,
 ): { url: string; init: HttpInit } {
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+  const headers: Record<string, string> = {
+    ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
+    Accept: 'application/json',
+    'X-Protocol-Version': String(PROTOCOL_VERSION),
+  }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
   return {
@@ -29,7 +35,7 @@ export async function call(
   base: string,
   method: 'GET' | 'POST' | 'DELETE',
   path: string,
-  token: string,
+  token: string | null,
   body?: unknown,
 ): Promise<Reply<unknown>> {
   const { url, init } = buildRequest(base, method, path, token, body)

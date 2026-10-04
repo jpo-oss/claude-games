@@ -82,6 +82,25 @@ function serve(on: On, route: (req: Seen) => { status: number; body: unknown }):
   return seen
 }
 
+// The test engine keeps no store, so the plugin's store calls are answered from a Map.
+function store(on: On, init: Record<string, unknown> = {}): Map<string, unknown> {
+  const m = new Map(Object.entries(init))
+  on('store.get', async (_$, e) => ({ value: m.get(e.key) }))
+  on('store.set', async (_$, e) => {
+    m.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('store.delete', async (_$, e) => {
+    m.delete(e.key)
+    return { value: undefined }
+  })
+  on('store.keys', async () => ({ value: [...m.keys()] }))
+
+  return m
+}
+
+const SIGNED_IN = { 'session:https://games.jpoapps.com': { session: 'sess_1', login: 'alice' } }
+
 const OPPONENT = { login: 'bob', snapshot: EMPTY_BOARD, isOver: false }
 
 test('battle: each incoming attack is applied once, however often the server repeats it', async ($: Engine, on: On) => {
@@ -130,6 +149,19 @@ test('the leaderboard degrades to a short message when the server is down', asyn
   await ui.advance(48)
   await ui.advance(48)
   expect(await shown(ui)).toContain('Game server unreachable. Solo play still works.')
+})
+
+test('an outdated game tells the player how to update', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on, SIGNED_IN)
+  serve(on, () => ({ status: 426, body: { error: 'protocol 1 is no longer supported' } }))
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('Run /plugin update block-battle@claude-games')
 })
 
 test('the leaderboard shows both columns and marks your own row', async ($: Engine, on: On) => {
