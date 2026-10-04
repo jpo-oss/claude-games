@@ -43,6 +43,9 @@ const rt: {
   session: Session | null
   signIn: Timer | null
   isSigningIn: boolean
+  // Bumped when the pane closes so a flow still waiting on a request stops when it resumes.
+  signInGen: number
+  signInLine: string | null
   queueTimer: Timer | null
   isPolling: boolean
   isSyncing: boolean
@@ -58,6 +61,8 @@ const rt: {
   session: null,
   signIn: null,
   isSigningIn: false,
+  signInGen: 0,
+  signInLine: null,
   queueTimer: null,
   isPolling: false,
   isSyncing: false,
@@ -99,46 +104,63 @@ async function dropSession($: EngineInterface) {
 async function startSignIn($: EngineInterface) {
   if (rt.isSigningIn) return
   rt.isSigningIn = true
+  const gen = ++rt.signInGen
+  const live = () => gen === rt.signInGen
   const end = (notice: string) => {
+    if (!live()) return
     rt.isSigningIn = false
     rt.signIn = null
+    rt.signInLine = null
 
     return setView($, { notice })
   }
   const fetch = (url: string, init?: HttpInit) => $.http.fetch(url, init)
-  const code = await requestDeviceCode(fetch)
-  if (!code) return end(NO_GITHUB)
-  await setView($, { notice: signInLine(code.uri, code.userCode) })
-  const startedAt = await $.clock.now()
-  let interval = code.interval
-  const tick = async () => {
-    if ((await $.clock.now()) - startedAt > code.expiresIn * 1000) return end(CANCELLED)
-    const poll = await pollToken(fetch, code.deviceCode)
-    if (poll.kind === 'pending' || poll.kind === 'slowDown') {
-      if (poll.kind === 'slowDown') interval += 5
-      rt.signIn = $.clock.after(interval * 1000, () => void tick())
+  try {
+    const code = await requestDeviceCode(fetch)
+    if (!live()) return
+    if (!code) return end(NO_GITHUB)
+    rt.signInLine = signInLine(code.uri, code.userCode)
+    await setView($, { leaderboard: null, notice: rt.signInLine })
+    const startedAt = await $.clock.now()
+    let interval = code.interval
+    const tick = async () => {
+      try {
+        if (!live()) return
+        if ((await $.clock.now()) - startedAt > code.expiresIn * 1000) return end(CANCELLED)
+        const poll = await pollToken(fetch, code.deviceCode)
+        if (!live()) return
+        if (poll.kind === 'pending' || poll.kind === 'slowDown') {
+          if (poll.kind === 'slowDown') interval += 5
+          rt.signIn = $.clock.after(interval * 1000, () => void tick())
 
-      return
+          return
+        }
+        if (poll.kind === 'failed') return end(poll.reason === 'error' ? NO_GITHUB : CANCELLED)
+        await setView($, { notice: SIGNING_IN })
+        const r = await call(fetch, rt.base, 'POST', '/v1/session', null, { githubToken: poll.token })
+        if (!live()) return
+        const s = r.ok ? parseSession(r.data) : null
+        if (!s) return end(r.ok ? DOWN : noticeFor(r))
+        rt.session = s
+        await $.store.set(sessionKey(rt.base), s)
+        await setView($, { me: s.login })
+        await end(`Signed in as ${s.login}.`)
+        void prefetchBest($)
+      } catch {
+        await end(NO_GITHUB)
+      }
     }
-    if (poll.kind === 'failed') return end(poll.reason === 'error' ? NO_GITHUB : CANCELLED)
-    await setView($, { notice: SIGNING_IN })
-    const r = await call(fetch, rt.base, 'POST', '/v1/session', null, { githubToken: poll.token })
-    const s = r.ok ? parseSession(r.data) : null
-    if (!s) return end(r.ok ? DOWN : noticeFor(r))
-    rt.session = s
-    await $.store.set(sessionKey(rt.base), s)
-    await setView($, { me: s.login })
-    await end(`Signed in as ${s.login}.`)
-    void prefetchBest($)
+    rt.signIn = $.clock.after(interval * 1000, () => void tick())
+  } catch {
+    await end(NO_GITHUB)
   }
-  rt.signIn = $.clock.after(interval * 1000, () => void tick())
 }
 
 async function api($: EngineInterface, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<Reply<unknown>> {
   const s = await loadSession($)
   if (s === null) {
     void startSignIn($)
-    return { ok: false, status: -1, error: SIGNING_IN }
+    return { ok: false, status: -1, error: rt.signInLine ?? SIGNING_IN }
   }
   const reply = await call((url, init) => $.http.fetch(url, init), rt.base, method, path, s.session, body)
   if (!reply.ok && reply.status === 401) await dropSession($)
@@ -152,7 +174,7 @@ async function loadLeaderboard($: EngineInterface) {
   const r = await api($, 'GET', '/v1/leaderboard')
   const board = r.ok ? parseLeaderboard(r.data) : null
   if (board) await setView($, { leaderboard: board, notice: null })
-  else if (r.ok || r.status !== -1) await setView($, { leaderboard: null, notice: r.ok ? DOWN : fail(r) })
+  else await setView($, { leaderboard: null, notice: r.ok ? DOWN : fail(r) })
 }
 
 // For the menu's Marathon best only: it never touches the notice line, which a slow reply
@@ -165,6 +187,7 @@ async function prefetchBest($: EngineInterface) {
 }
 
 async function submitScore($: EngineInterface, m: Extract<ClientMsg, { type: 'gameOver' }>) {
+  if ((await loadSession($)) === null) return
   const r = await api($, 'POST', '/v1/scores', {
     mode: 'marathon',
     score: m.score,
@@ -206,7 +229,7 @@ async function pollQueue($: EngineInterface, startedAt: number) {
       stopQueue()
       if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue')
       await setBattle($, idleBattle())
-      if (r.status !== -1) await setView($, { notice: fail(r) })
+      await setView($, { notice: fail(r) })
 
       return
     }
@@ -337,6 +360,8 @@ export const register: Register = (on, options) => {
       rt.signIn?.cancel()
       rt.signIn = null
       rt.isSigningIn = false
+      rt.signInLine = null
+      rt.signInGen++
       await resetBattle($, true)
     }
 
