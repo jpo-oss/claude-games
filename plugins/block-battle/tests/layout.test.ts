@@ -14,17 +14,12 @@ type Ui = Mounted<'terminal', 'Pane'>
 const SIZES = { big: { columns: 66, rows: 46 }, compact: { columns: 48, rows: 26 }, mini: { columns: 33, rows: 22 }, tiny: { columns: 20, rows: 10 } } as const
 type SizeName = keyof typeof SIZES
 
-const proc = (stdout: string, exitCode = 0) => ({ exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 const BOARD = {
   marathon: [{ login: 'bob', score: 91250, lines: 80, level: 9, at: 1 }, { login: 'alice', score: 40300, lines: 41, level: 5, at: 2 }, { login: 'carol', score: 1200, lines: 5, level: 1, at: 3 }],
   wins: [{ login: 'alice', wins: 12 }, { login: 'bob', wins: 3 }],
 }
 function serve(on: On) {
-  on('process.run', async (_$, e) => {
-    const cmd = e.argv.join(' ')
-
-    return { value: cmd === 'gh auth token' ? proc('ghp_x\n') : cmd.startsWith('gh api user') ? proc('alice\n') : proc('', 1) }
-  })
+  on('store.get', async (_$, e) => ({ value: e.key === 'session:https://games.jpoapps.com' ? { session: 's', login: 'alice' } : undefined }))
   on('http.fetch', async () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(BOARD) } }))
 }
 

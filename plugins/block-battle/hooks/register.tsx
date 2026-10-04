@@ -1,7 +1,9 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, HttpInit, Register, Timer } from 'claude-code'
 
 import type { Battle, ClientMsg, GameView } from '../types'
+import { parseSession, pollToken, requestDeviceCode, sessionKey } from './auth'
+import type { Session } from './auth'
 import { OPP_COLUMNS, TIERS } from './draw'
 import {
   call,
@@ -27,15 +29,20 @@ const startView = (): GameView => ({ me: null, leaderboard: null, notice: null, 
 
 const view = atom({ plugin: 'block-battle', key: 'view' } as const, startView())
 
-const NO_TOKEN = 'Sign in with the GitHub CLI (gh auth login) to use the leaderboard and battles.'
 const DOWN = 'Game server unreachable. Solo play still works.'
 const SIGNED_OUT = 'Signed out. Pick Battle or Leaderboard to sign in again.'
 const OUTDATED = 'Block Battle is out of date. Run /plugin update block-battle@claude-games'
+const SIGNING_IN = 'Signing in with GitHub...'
+const NO_GITHUB = "Couldn't reach GitHub to sign in. Solo play still works."
+const CANCELLED = 'Sign-in was cancelled or expired. Pick Battle or Leaderboard to try again.'
+const signInLine = (uri: string, code: string) => `Sign in: open ${uri} and enter ${code}`
 
 const rt: {
   base: string
-  // The GitHub token lives here and nowhere else: never in state, props, logs or a message.
-  token: string | null
+  // Our server's session key. The GitHub token is never kept: it is exchanged and dropped.
+  session: Session | null
+  signIn: Timer | null
+  isSigningIn: boolean
   queueTimer: Timer | null
   isPolling: boolean
   isSyncing: boolean
@@ -48,7 +55,9 @@ const rt: {
   wasNudged: boolean
 } = {
   base: 'https://games.jpoapps.com',
-  token: null,
+  session: null,
+  signIn: null,
+  isSigningIn: false,
   queueTimer: null,
   isPolling: false,
   isSyncing: false,
@@ -59,30 +68,6 @@ const rt: {
   nudge: null,
   isTurnOn: false,
   wasNudged: false,
-}
-
-async function ensureToken($: EngineInterface): Promise<string | null> {
-  if (rt.token !== null) return rt.token
-  try {
-    const { exitCode, stdout } = await $.process.run(['gh', 'auth', 'token'], { timeoutMs: 10_000 })
-    const found = stdout.trim()
-    if (exitCode === 0 && found !== '') rt.token = found
-  } catch {
-    rt.token = null
-  }
-
-  return rt.token
-}
-
-async function ensureMe($: EngineInterface) {
-  if ((await read($, view)).me !== null) return
-  try {
-    const { exitCode, stdout } = await $.process.run(['gh', 'api', 'user', '--jq', '.login'], { timeoutMs: 10_000 })
-    const login = stdout.trim()
-    if (exitCode === 0 && login !== '') await update($, view, v => ({ ...v, me: login }))
-  } catch {
-    // the leaderboard just does not highlight a row
-  }
 }
 
 const setView = ($: EngineInterface, patch: Partial<GameView>) => update($, view, v => ({ ...v, ...patch }))
@@ -97,28 +82,83 @@ function noticeFor(r: { status: number; error: string }): string {
   return `Server said: ${r.error}`
 }
 
+async function loadSession($: EngineInterface): Promise<Session | null> {
+  if (rt.session) return rt.session
+  rt.session = parseSession(await $.store.get(sessionKey(rt.base)))
+  if (rt.session) await setView($, { me: rt.session.login })
+
+  return rt.session
+}
+
+async function dropSession($: EngineInterface) {
+  rt.session = null
+  await $.store.delete(sessionKey(rt.base))
+  await setView($, { me: null })
+}
+
+async function startSignIn($: EngineInterface) {
+  if (rt.isSigningIn) return
+  rt.isSigningIn = true
+  const end = (notice: string) => {
+    rt.isSigningIn = false
+    rt.signIn = null
+
+    return setView($, { notice })
+  }
+  const fetch = (url: string, init?: HttpInit) => $.http.fetch(url, init)
+  const code = await requestDeviceCode(fetch)
+  if (!code) return end(NO_GITHUB)
+  await setView($, { notice: signInLine(code.uri, code.userCode) })
+  const startedAt = await $.clock.now()
+  let interval = code.interval
+  const tick = async () => {
+    if ((await $.clock.now()) - startedAt > code.expiresIn * 1000) return end(CANCELLED)
+    const poll = await pollToken(fetch, code.deviceCode)
+    if (poll.kind === 'pending' || poll.kind === 'slowDown') {
+      if (poll.kind === 'slowDown') interval += 5
+      rt.signIn = $.clock.after(interval * 1000, () => void tick())
+
+      return
+    }
+    if (poll.kind === 'failed') return end(poll.reason === 'error' ? NO_GITHUB : CANCELLED)
+    await setView($, { notice: SIGNING_IN })
+    const r = await call(fetch, rt.base, 'POST', '/v1/session', null, { githubToken: poll.token })
+    const s = r.ok ? parseSession(r.data) : null
+    if (!s) return end(r.ok ? DOWN : noticeFor(r))
+    rt.session = s
+    await $.store.set(sessionKey(rt.base), s)
+    await setView($, { me: s.login })
+    await end(`Signed in as ${s.login}.`)
+    void prefetchBest($)
+  }
+  rt.signIn = $.clock.after(interval * 1000, () => void tick())
+}
+
 async function api($: EngineInterface, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<Reply<unknown>> {
-  const t = await ensureToken($)
-  if (t === null) return { ok: false, status: -1, error: NO_TOKEN }
-  const reply = await call((url, init) => $.http.fetch(url, init), rt.base, method, path, t, body)
-  if (!reply.ok && reply.status === 401) rt.token = null
+  const s = await loadSession($)
+  if (s === null) {
+    void startSignIn($)
+    return { ok: false, status: -1, error: SIGNING_IN }
+  }
+  const reply = await call((url, init) => $.http.fetch(url, init), rt.base, method, path, s.session, body)
+  if (!reply.ok && reply.status === 401) await dropSession($)
 
   return reply
 }
 
-const fail = (r: { status: number; error: string }) => (r.status === -1 ? NO_TOKEN : noticeFor(r))
+const fail = (r: { status: number; error: string }) => (r.status === -1 ? r.error : noticeFor(r))
 
 async function loadLeaderboard($: EngineInterface) {
-  void ensureMe($)
   const r = await api($, 'GET', '/v1/leaderboard')
   const board = r.ok ? parseLeaderboard(r.data) : null
   if (board) await setView($, { leaderboard: board, notice: null })
-  else await setView($, { leaderboard: null, notice: r.ok ? DOWN : fail(r) })
+  else if (r.ok || r.status !== -1) await setView($, { leaderboard: null, notice: r.ok ? DOWN : fail(r) })
 }
 
 // For the menu's Marathon best only: it never touches the notice line, which a slow reply
 // would otherwise overwrite after the person has moved on (a matchmaking error, say).
 async function prefetchBest($: EngineInterface) {
+  if ((await loadSession($)) === null) return
   const r = await api($, 'GET', '/v1/leaderboard')
   const board = r.ok ? parseLeaderboard(r.data) : null
   if (board) await setView($, { leaderboard: board })
@@ -164,9 +204,9 @@ async function pollQueue($: EngineInterface, startedAt: number) {
     const r = await api($, 'POST', '/v1/battle/queue')
     if (!r.ok) {
       stopQueue()
-      if (r.status !== 401) await api($, 'DELETE', '/v1/battle/queue')
+      if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue')
       await setBattle($, idleBattle())
-      await setView($, { notice: fail(r) })
+      if (r.status !== -1) await setView($, { notice: fail(r) })
 
       return
     }
@@ -192,7 +232,6 @@ async function pollQueue($: EngineInterface, startedAt: number) {
 
 async function startQueue($: EngineInterface) {
   await resetBattle($, true)
-  void ensureMe($)
   await setView($, { notice: null })
   await setBattle($, { status: 'queueing' })
   const startedAt = await $.clock.now()
@@ -294,7 +333,12 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.close', async ($, e, next) => {
-    if (e.id === PANE) await resetBattle($, true)
+    if (e.id === PANE) {
+      rt.signIn?.cancel()
+      rt.signIn = null
+      rt.isSigningIn = false
+      await resetBattle($, true)
+    }
 
     return next(e)
   })

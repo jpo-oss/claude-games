@@ -51,36 +51,9 @@ test('a hard drop changes the field and scores', async ($: Engine) => {
 })
 
 const EMPTY_BOARD = '.'.repeat(200)
-const proc = (stdout: string, exitCode = 0) => ({ exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 const reply = (body: unknown, status = 200) => ({ status, ok: status < 300, headers: {}, text: JSON.stringify(body) })
 
 type Seen = { method: string; url: string; auth: string; body: unknown }
-
-function serve(on: On, route: (req: Seen) => { status: number; body: unknown }): Seen[] {
-  const seen: Seen[] = []
-  on('process.run', async (_$, e) => {
-    const cmd = e.argv.join(' ')
-    if (cmd === 'gh auth token') return { value: proc('ghp_secret\n') }
-    if (cmd.startsWith('gh api user')) return { value: proc('alice\n') }
-
-    return { value: proc('', 1) }
-  })
-  on('http.fetch', async (_$, e) => {
-    const { pathname } = new URL(e.url)
-    const req: Seen = {
-      method: e.init?.method ?? 'GET',
-      url: e.url,
-      auth: e.init?.headers?.Authorization ?? '',
-      body: e.init?.body ? JSON.parse(e.init.body) : undefined,
-    }
-    seen.push(req)
-    const out = route({ ...req, url: pathname })
-
-    return { value: reply(out.body, out.status) }
-  })
-
-  return seen
-}
 
 // The test engine keeps no store, so the plugin's store calls are answered from a Map.
 function store(on: On, init: Record<string, unknown> = {}): Map<string, unknown> {
@@ -100,6 +73,26 @@ function store(on: On, init: Record<string, unknown> = {}): Map<string, unknown>
 }
 
 const SIGNED_IN = { 'session:https://games.jpoapps.com': { session: 'sess_1', login: 'alice' } }
+
+function serve(on: On, route: (req: Seen) => { status: number; body: unknown }, saved: Record<string, unknown> = SIGNED_IN): Seen[] {
+  const seen: Seen[] = []
+  store(on, saved)
+  on('http.fetch', async (_$, e) => {
+    const { pathname } = new URL(e.url)
+    const req: Seen = {
+      method: e.init?.method ?? 'GET',
+      url: e.url,
+      auth: e.init?.headers?.Authorization ?? '',
+      body: e.init?.body ? JSON.parse(e.init.body) : undefined,
+    }
+    seen.push(req)
+    const out = route({ ...req, url: pathname })
+
+    return { value: reply(out.body, out.status) }
+  })
+
+  return seen
+}
 
 const OPPONENT = { login: 'bob', snapshot: EMPTY_BOARD, isOver: false }
 
@@ -121,20 +114,20 @@ test('battle: each incoming attack is applied once, however often the server rep
   await ui.advance(48)
   for (let i = 0; i < 6; i++) await ui.advance(200)
 
-  expect(seen[0]).toEqual({ method: 'POST', url: 'https://games.jpoapps.com/v1/battle/queue', auth: 'Bearer ghp_secret', body: undefined })
+  expect(seen[0]).toEqual({ method: 'POST', url: 'https://games.jpoapps.com/v1/battle/queue', auth: 'Bearer sess_1', body: undefined })
   const sync = seen.filter(r => r.url.endsWith('/sync'))
   expect(sync.length).toBeGreaterThanOrEqual(4)
   expect(sync[0]).toEqual({
     method: 'POST',
     url: 'https://games.jpoapps.com/v1/battle/r1/sync',
-    auth: 'Bearer ghp_secret',
+    auth: 'Bearer sess_1',
     body: { seq: 1, attacks: [], snapshot: expect.stringMatching(/^[.IOTSZJL]{200}$/), isOver: false },
   })
   expect(sync.map(r => (r.body as { seq: number }).seq).slice(0, 4)).toEqual([1, 2, 3, 4])
   expect((await labelled(ui, 'INCOMING')).trim()).toBe('INCOMING 5')
   expect(await labelled(ui, 'bob')).toContain('bob')
-  expect(JSON.stringify(await ui.drawn())).not.toContain('ghp_secret')
-  expect(JSON.stringify(seen.map(r => [r.url, r.body]))).not.toContain('ghp_secret')
+  expect(JSON.stringify(await ui.drawn())).not.toContain('sess_1')
+  expect(JSON.stringify(seen.map(r => [r.url, r.body]))).not.toContain('sess_1')
 })
 
 test('the leaderboard degrades to a short message when the server is down', async ($: Engine, on: On) => {
@@ -153,7 +146,6 @@ test('the leaderboard degrades to a short message when the server is down', asyn
 
 test('an outdated game tells the player how to update', async ($: Engine, on: On) => {
   mock.clock(on)
-  store(on, SIGNED_IN)
   serve(on, () => ({ status: 426, body: { error: 'protocol 1 is no longer supported' } }))
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
@@ -272,7 +264,7 @@ test('marathon game over posts the score once and shows the fill and the label',
   for (let i = 0; i < 6; i++) await ui.advance(200)
   const posts = seen.filter(r => r.url.endsWith('/v1/scores'))
   expect(posts).toHaveLength(1)
-  expect(posts[0]).toMatchObject({ method: 'POST', auth: 'Bearer ghp_secret', body: { mode: 'marathon', lines: 0, level: 1 } })
+  expect(posts[0]).toMatchObject({ method: 'POST', auth: 'Bearer sess_1', body: { mode: 'marathon', lines: 0, level: 1 } })
   expect((posts[0]?.body as { score: number }).score).toBeGreaterThan(0)
   expect(await shown(ui)).toContain('GAME OVER')
 })
@@ -345,4 +337,91 @@ test('battle: a 410 on sync clears the battle, stops syncing and sends no queue 
   expect(seen.filter(r => r.url.endsWith('/sync'))).toHaveLength(1)
   expect(seen.filter(r => r.method === 'DELETE')).toHaveLength(0)
   expect(await shown(ui)).toContain('Match cancelled: your opponent left before it started.')
+})
+
+const DEVICE = { device_code: 'dc', user_code: 'WDJB-MJHT', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 }
+const EMPTY_LEADERBOARD = { marathon: [], wins: [] }
+
+function github(on: On, polls: unknown[], server: (req: Seen) => { status: number; body: unknown }, saved: Record<string, unknown> = {}) {
+  const queue = [...polls]
+  const seen: Seen[] = []
+  const saves = store(on, saved)
+  on('http.fetch', async (_$, e) => {
+    const req: Seen = { method: e.init?.method ?? 'GET', url: e.url, auth: e.init?.headers?.Authorization ?? '', body: e.init?.body }
+    seen.push(req)
+    if (e.url === 'https://github.com/login/device/code') return { value: reply(DEVICE) }
+    if (e.url === 'https://github.com/login/oauth/access_token') return { value: reply(queue.shift() ?? { error: 'authorization_pending' }) }
+    const out = server({ ...req, url: new URL(e.url).pathname, body: e.init?.body ? JSON.parse(e.init.body) : undefined })
+
+    return { value: reply(out.body, out.status) }
+  })
+
+  return { seen, saves }
+}
+
+async function openLeaderboard(ui: Ui) {
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+}
+
+test('choosing Leaderboard while signed out shows the GitHub code, then signs in', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const { seen, saves } = github(on, [{ error: 'authorization_pending' }, { access_token: 'gho_secret', scope: '' }], req =>
+    req.url === '/v1/session' ? { status: 200, body: { session: 'sess_9', login: 'carol' } } : { status: 200, body: EMPTY_LEADERBOARD },
+  )
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  expect(await shown(ui)).toContain('WDJB-MJHT')
+  expect(await shown(ui)).toContain('github.com/login/device')
+  await clock.advance(5_000)
+  await clock.advance(5_000)
+  await ui.advance(48)
+
+  const session = seen.find(r => r.url.endsWith('/v1/session'))!
+  expect(session.auth).toBe('')
+  expect(saves.get('session:https://games.jpoapps.com')).toEqual({ session: 'sess_9', login: 'carol' })
+  expect(JSON.stringify([...saves])).not.toContain('gho_secret')
+  expect(await shown(ui)).toContain('Marathon top 5')
+  expect(await shown(ui)).not.toContain('gho_secret')
+  expect(seen.filter(r => r.url.includes('/v1/') && !r.url.endsWith('/v1/session')).every(r => r.auth === 'Bearer sess_9')).toBe(true)
+})
+
+test('a denied code says so and can be retried', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  github(on, [{ error: 'access_denied' }], () => ({ status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  await clock.advance(5_000)
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('Sign-in was cancelled')
+})
+
+test('GitHub being down leaves solo play alone', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on)
+  on('http.fetch', async () => {
+    throw new Error('offline')
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  expect(await shown(ui)).toContain("Couldn't reach GitHub")
+})
+
+test('a 401 forgets the stored session', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const { saves } = github(on, [], () => ({ status: 401, body: { error: 'unknown session' } }), SIGNED_IN)
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  expect(saves.has('session:https://games.jpoapps.com')).toBe(false)
+})
+
+test('a session for one server is not sent to another', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const { seen } = github(on, [], () => ({ status: 200, body: EMPTY_LEADERBOARD }), { 'session:https://other.example': { session: 'other_sess', login: 'alice' } })
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  expect(seen.some(r => r.auth.includes('other_sess'))).toBe(false)
 })
