@@ -16,8 +16,8 @@ import {
 // Expected values are written out by hand from the server's routes, not derived from the builders.
 
 test('a GET carries the bearer token and no body, and the base URL loses trailing slashes', () => {
-  expect(buildRequest('https://tetris.example/', 'GET', '/v1/leaderboard', 'tok')).toEqual({
-    url: 'https://tetris.example/v1/leaderboard',
+  expect(buildRequest('https://games.example/', 'GET', '/v1/leaderboard', 'tok')).toEqual({
+    url: 'https://games.example/v1/leaderboard',
     init: { method: 'GET', headers: { Authorization: 'Bearer tok', Accept: 'application/json' } },
   })
 })

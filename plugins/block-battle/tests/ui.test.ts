@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, Mounted } from 'claude-code/testing'
 
 const PANE = {
-  title: 'Tetris',
+  title: 'Block Battle',
   isFocused: true,
   bodyColumns: 100,
   placement: 'inline' as const,
@@ -15,7 +15,7 @@ const target = (surface: 'terminal' | 'desktop') =>
 
 type Ui = Mounted<'terminal' | 'desktop', 'Pane'>
 
-const shown = async (ui: Ui) => JSON.stringify(await ui.drawn({ in: 'tetris' }))
+const shown = async (ui: Ui) => JSON.stringify(await ui.drawn({ in: 'game' }))
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`the menu draws on ${surface}`, async ($: Engine) => {
@@ -23,7 +23,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const text = await shown(ui)
     for (const word of ['Play while Claude works', 'Marathon', 'Battle', 'Leaderboard', 'click here to activate panel']) expect(text).toContain(word)
     // The title must be there in some form: block letters in the big layout, plain text otherwise.
-    expect(text.includes('JPO TETRIS') || text.includes('█')).toBe(true)
+    expect(text.includes('BLOCK BATTLE') || text.includes('█')).toBe(true)
     const client = await ui.find({ type: 'Client' })
     // Sized from the pane (bodyColumns 100, bodyRows 30 above), written out on purpose: unsized, the
     // region shrinks to what the module draws and a "too small" note keeps it too small.
@@ -33,10 +33,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
 }
 
 async function labelled(ui: Ui, word: string): Promise<string> {
-  return (await ui.find({ type: 'Text', text: new RegExp(word), in: 'tetris' }))?.text ?? ''
+  return (await ui.find({ type: 'Text', text: new RegExp(word), in: 'game' }))?.text ?? ''
 }
 // The first number-only Text of the side panel is the score value.
-const score = async (ui: Ui) => Number((await ui.find({ type: 'Text', text: /^\d+$/, in: 'tetris' }))?.text ?? NaN)
+const score = async (ui: Ui) => Number((await ui.find({ type: 'Text', text: /^\d+$/, in: 'game' }))?.text ?? NaN)
 
 test('a hard drop changes the field and scores', async ($: Engine) => {
   const ui = await $.ui.mount(target('terminal'))
@@ -129,7 +129,7 @@ test('the leaderboard degrades to a short message when the server is down', asyn
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
-  expect(await shown(ui)).toContain('Tetris server unreachable. Solo play still works.')
+  expect(await shown(ui)).toContain('Game server unreachable. Solo play still works.')
 })
 
 test('the leaderboard shows both columns and marks your own row', async ($: Engine, on: On) => {
@@ -151,9 +151,9 @@ test('the leaderboard shows both columns and marks your own row', async ($: Engi
   expect(text).toContain('Marathon top 5')
   expect(text).toContain('Battle wins top 5')
   expect(await labelled(ui, '1\\s+bob')).toMatch(/^\s*1\s+bob\s+9000\s*$/)
-  const mine = await ui.find({ type: 'Text', text: /2\s+alice/, in: 'tetris' })
+  const mine = await ui.find({ type: 'Text', text: /2\s+alice/, in: 'game' })
   expect(mine?.props.inverse).toBe(true)
-  expect((await ui.find({ type: 'Text', text: /1\s+bob/, in: 'tetris' }))?.props.inverse).toBe(false)
+  expect((await ui.find({ type: 'Text', text: /1\s+bob/, in: 'game' }))?.props.inverse).toBe(false)
 })
 
 // What the engine does beneath the plugins in a session, as far as the nudge cares.
@@ -178,7 +178,7 @@ test('long-turn nudge: one toast per turn, re-armed by the next turn', async ($:
   await clock.advance(119_000)
   expect(toasts).toEqual([])
   await clock.advance(2_000)
-  expect(toasts).toEqual(['Long task. /tetris while you wait?'])
+  expect(toasts).toEqual(['Long task. /block-battle while you wait?'])
   await $.prompt.submit({ text: 'queued mid turn', wait: false, origin: { kind: 'composer' } })
   await clock.advance(300_000)
   expect(toasts).toHaveLength(1)
@@ -225,7 +225,7 @@ test('long-turn nudge: waits while a question dialog is up', async ($: Engine, o
   await clock.advance(80_000)
   await asking
   await clock.advance(20_000)
-  expect(toasts).toEqual(['Long task. /tetris while you wait?'])
+  expect(toasts).toEqual(['Long task. /block-battle while you wait?'])
 })
 
 test('marathon game over posts the score once and shows the fill and the label', async ($: Engine, on: On) => {

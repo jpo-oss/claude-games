@@ -56,15 +56,15 @@ test('line clear: white flash, then thin rows, then a gap', () => {
 
 test('a popping label is a centred bordered pill and fades', () => {
   const g = still()
-  const label = (age: number) => [{ text: 'TETRIS', color: '#00e5ff', age }]
+  const label = (age: number) => [{ text: 'DOUBLE', color: '#00e5ff', age }]
   const rows = (age: number) => fieldRows(g, { ...emptyFx(), labels: label(age) }, [], 0)
   // compact: pills start on row 4, three rows tall, 10 wide in a 20 wide board
   expect(text(rows(50)[4]!).slice(5, 15)).toBe('╭────────╮')
-  expect(text(rows(50)[5]!).slice(5, 15)).toBe('│ TETRIS │')
+  expect(text(rows(50)[5]!).slice(5, 15)).toBe('│ DOUBLE │')
   expect(text(rows(50)[6]!).slice(5, 15)).toBe('╰────────╯')
-  expect(rows(50)[5]![7]).toEqual({ c: 'T', bg: '#00e5ff', fg: '#000000', bold: true })
-  expect(rows(300)[5]![7]).toEqual({ c: 'T', bg: '#0b0b12', fg: '#00e5ff', bold: true })
-  expect(rows(900)[5]![7]).toEqual({ c: 'T', bg: '#0b0b12', fg: '#00e5ff', bold: true, dim: true })
+  expect(rows(50)[5]![7]).toEqual({ c: 'D', bg: '#00e5ff', fg: '#000000', bold: true })
+  expect(rows(300)[5]![7]).toEqual({ c: 'D', bg: '#0b0b12', fg: '#00e5ff', bold: true })
+  expect(rows(900)[5]![7]).toEqual({ c: 'D', bg: '#0b0b12', fg: '#00e5ff', bold: true, dim: true })
   // a long name still fits the board
   const long = fieldRows(g, { ...emptyFx(), labels: [{ text: 'T-SPIN MINI DOUBLE', color: '#b44cff', age: 300 }] }, [], 0)
   expect(text(long[5]!)).toBe('│T-SPIN MINI DOUBLE│')
@@ -164,7 +164,7 @@ test('a preview centres the piece in its block', () => {
 })
 
 test('the block title is five rows of equal width', () => {
-  for (const w of ['JPO', 'TETRIS']) {
+  for (const w of ['BLOCK', 'BATTLE']) {
     const rows = bigWord(w)
     expect(rows).toHaveLength(5)
     expect(new Set(rows.map(r => r.length)).size).toBe(1)

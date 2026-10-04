@@ -1,6 +1,6 @@
 import type { ClientModule, ClientSurface, RenderChildren } from 'claude-code'
 
-import type { ClientMsg, TetrisView } from '../types'
+import type { ClientMsg, GameView } from '../types'
 import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_MS, TIERS, TRAIL_MS, bigWord, blankRows, emptyFx, fieldRows, overStep, pickTier, previewRows, runs, snapshotRows } from './draw'
 import type { Ch, Fx, Label, Overlay, Size } from './draw'
 import { newGame, receiveGarbage, snapshot, step } from './engine'
@@ -16,7 +16,7 @@ type Screen = 'menu' | 'lobby' | 'play' | 'leaderboard'
 // Everything mutable lives here, so the 16 ms tick changes it in place and asks for a redraw only when
 // something visible moved. `rev` is what setState carries to make the engine call the module again.
 type Live = {
-  props: TetrisView
+  props: GameView
   rev: number
   screen: Screen
   menu: number
@@ -46,21 +46,21 @@ const MENU = [
   { label: 'Leaderboard', hint: 'team top 5' },
 ] as const
 
-const emptyProps = (): TetrisView => ({
+const emptyProps = (): GameView => ({
   me: null,
   leaderboard: null,
   notice: null,
   battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null },
 })
 
-const newLive = (props: TetrisView): Live => ({
+const newLive = (props: GameView): Live => ({
   props, rev: 0, screen: 'menu', menu: 0, mode: 'marathon', game: null, inputs: [], t: 0, lastAt: 0,
   isPaused: false, fx: emptyFx(), overMs: 0, applied: [], outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
   hasPostedOver: false, result: null, isDirty: true, hasKeyed: false,
 })
 
 const CLEAR_NAMES: Record<string, string> = {
-  single: 'SINGLE', double: 'DOUBLE', triple: 'TRIPLE', tetris: 'TETRIS',
+  single: 'SINGLE', double: 'DOUBLE', triple: 'TRIPLE', quad: 'QUAD',
   tspinMini: 'T-SPIN MINI', tspinMiniSingle: 'T-SPIN MINI SINGLE', tspinMiniDouble: 'T-SPIN MINI DOUBLE',
   tspin: 'T-SPIN', tspinSingle: 'T-SPIN SINGLE', tspinDouble: 'T-SPIN DOUBLE', tspinTriple: 'T-SPIN TRIPLE',
 }
@@ -75,7 +75,7 @@ function applyEvents(live: Live, before: Game, events: readonly GameEvent[]) {
     if (ev.type === 'lineClear') {
       fx.clear = { rows: ev.rows, age: 0 }
       if (ev.perfectClear) pushLabel(fx, 'PERFECT CLEAR', '#ffffff')
-      pushLabel(fx, CLEAR_NAMES[ev.kind] ?? String(ev.kind).toUpperCase(), ev.kind === 'tetris' ? '#00e5ff' : ev.kind.startsWith('tspin') ? '#b44cff' : '#ffd400')
+      pushLabel(fx, CLEAR_NAMES[ev.kind] ?? String(ev.kind).toUpperCase(), ev.kind === 'quad' ? '#00e5ff' : ev.kind.startsWith('tspin') ? '#b44cff' : '#ffd400')
       if (ev.b2b) pushLabel(fx, 'BACK-TO-BACK', '#ff9a1f')
       if (ev.combo >= 1) pushLabel(fx, `COMBO x${ev.combo}`, '#38d64a')
       if (live.mode === 'battle' && ev.attack > 0) live.attacks.push(ev.attack)
@@ -349,7 +349,7 @@ function drawTitle(live: Live, surface: Surf, width: number) {
 
   return (
     <Box width={width} justifyContent="center">
-      {live.hasKeyed ? <Text bold color="cyan">JPO TETRIS</Text> : <Text bold color="yellow">{activate(width)}</Text>}
+      {live.hasKeyed ? <Text bold color="cyan">BLOCK BATTLE</Text> : <Text bold color="yellow">{activate(width)}</Text>}
     </Box>
   )
 }
@@ -454,7 +454,7 @@ function drawPlay(live: Live, surface: Surf) {
   if (tier === 'tiny') {
     return (
       <Box paddingX={1}>
-        <Text color="yellow">Too small for Tetris: widen and heighten this pane (21 x 22 at least).</Text>
+        <Text color="yellow">Too small for Block Battle: widen and heighten this pane (21 x 22 at least).</Text>
       </Box>
     )
   }
@@ -541,12 +541,12 @@ function drawMenu(live: Live, surface: Surf) {
     <Box flexDirection="column" alignItems="center" paddingX={1}>
       {isBig ? (
         <Box flexDirection="column">
-          {word('JPO', false)}
+          {word('BLOCK', false)}
           <Text> </Text>
-          {word('TETRIS', true)}
+          {word('BATTLE', true)}
         </Box>
       ) : (
-        <Text bold color="cyan">JPO TETRIS</Text>
+        <Text bold color="cyan">BLOCK BATTLE</Text>
       )}
       <Text dimColor>Play while Claude works</Text>
       <Box marginTop={1}>
@@ -639,7 +639,7 @@ function drawLeaderboard(live: Live, surface: Surf) {
   )
 }
 
-const Game: ClientModule<TetrisView, Shell> = (props, surface) => {
+const Game: ClientModule<GameView, Shell> = (props, surface) => {
   let shell = surface.state
   if (shell === undefined) {
     const live = newLive(props)

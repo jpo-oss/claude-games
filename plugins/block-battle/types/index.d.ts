@@ -15,7 +15,7 @@ export type Battle = {
   result: 'win' | 'loss' | null
 }
 
-export type TetrisView = {
+export type GameView = {
   me: string | null
   leaderboard: Leaderboard | null
   // Short human line shown instead of the leaderboard or lobby when the server is unreachable.
@@ -32,6 +32,6 @@ export type ClientMsg =
 
 declare module 'claude-code' {
   interface PluginState {
-    'block-battle': { view: TetrisView }
+    'block-battle': { view: GameView }
   }
 }

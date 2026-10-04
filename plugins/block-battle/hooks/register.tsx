@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Battle, ClientMsg, TetrisView } from '../types'
+import type { Battle, ClientMsg, GameView } from '../types'
 import { OPP_COLUMNS, TIERS } from './draw'
 import {
   call,
@@ -23,12 +23,12 @@ const QUEUE_POLL_MS = 1_500
 const QUEUE_GIVE_UP_MS = 120_000
 
 export const idleBattle = (): Battle => ({ status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null })
-const startView = (): TetrisView => ({ me: null, leaderboard: null, notice: null, battle: idleBattle() })
+const startView = (): GameView => ({ me: null, leaderboard: null, notice: null, battle: idleBattle() })
 
 const view = atom({ plugin: 'block-battle', key: 'view' } as const, startView())
 
 const NO_TOKEN = 'Sign in with the GitHub CLI (gh auth login) to use the leaderboard and battles.'
-const DOWN = 'Tetris server unreachable. Solo play still works.'
+const DOWN = 'Game server unreachable. Solo play still works.'
 const DENIED = 'The server did not accept this GitHub sign-in (justpressone members only).'
 
 const rt: {
@@ -84,7 +84,7 @@ async function ensureMe($: EngineInterface) {
   }
 }
 
-const setView = ($: EngineInterface, patch: Partial<TetrisView>) => update($, view, v => ({ ...v, ...patch }))
+const setView = ($: EngineInterface, patch: Partial<GameView>) => update($, view, v => ({ ...v, ...patch }))
 const setBattle = ($: EngineInterface, patch: Partial<Battle>) =>
   update($, view, v => ({ ...v, battle: { ...v.battle, ...patch } }))
 
@@ -173,7 +173,7 @@ async function pollQueue($: EngineInterface, startedAt: number) {
       stopQueue()
       rt.opponentLogin = q.opponent
       // Room for the big board and the opponent's beside it; a width the person dragged still wins.
-      $.ui.open({ id: PANE, title: 'Tetris', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
+      $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
       await setBattle($, {
         status: 'matched',
         roomId: q.roomId,
@@ -268,27 +268,27 @@ function tryNudge($: EngineInterface) {
     return
   }
   rt.wasNudged = true
-  $.ui.toast('Long task. /tetris while you wait?', { timeoutMs: 8_000 })
+  $.ui.toast('Long task. /block-battle while you wait?', { timeoutMs: 8_000 })
 }
 
 export const register: Register = (on, options) => {
   rt.base = typeof options.serverUrl === 'string' && options.serverUrl !== '' ? options.serverUrl : rt.base
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'tetris', description: 'Play Tetris while Claude works: Marathon, 1v1 Battle, team leaderboard' })
+    await $.command.register({ name: 'block-battle', description: 'Play Block Battle while Claude works: Marathon, 1v1 battles, leaderboard' })
 
     return next(e)
   })
 
-  on('command.run', { command: 'tetris' }, async $ => {
+  on('command.run', { command: 'block-battle' }, async $ => {
     await resetBattle($, true)
     await setView($, { notice: null })
-    const opened = await $.ui.open({ id: PANE, title: 'Tetris', focus: true, closeOnEscape: true, holdToasts: true, columns: 66, rows: 46 })
-    if (!opened.isPlaced) return { text: `Tetris could not be shown here: ${opened.reason}` }
+    const opened = await $.ui.open({ id: PANE, title: 'Block Battle', focus: true, closeOnEscape: true, holdToasts: true, columns: 66, rows: 46 })
+    if (!opened.isPlaced) return { text: `Block Battle could not be shown here: ${opened.reason}` }
     // The menu shows the Marathon best, so fetch it now rather than only when Leaderboard is chosen.
     void prefetchBest($)
     // The engine refuses $.ui.focus on a Client; only the person's click gives it the keys.
-    return { text: 'Tetris open. Click the Tetris pane to activate it; q returns to the menu, Esc closes it.' }
+    return { text: 'Block Battle open. Click the pane to play; q returns to the menu, Esc closes it.' }
   })
 
   on('ui.close', async ($, e, next) => {
@@ -298,7 +298,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.message', async ($, e, next) => {
-    if (e.element !== 'tetris') return next(e)
+    if (e.element !== 'game') return next(e)
     const m = parseClientMsg(e.data)
     if (m) void handle($, m)
 
@@ -312,7 +312,7 @@ export const register: Register = (on, options) => {
 
     // Without a size the region is as tall as what the module draws, so a one-line "too small"
     // note would measure the region as one line and keep it there.
-    return <Client key="tetris" module="./game.tsx" props={v} width={e.props.bodyColumns} height={e.props.scroll.bodyRows} />
+    return <Client key="game" module="./game.tsx" props={v} width={e.props.bodyColumns} height={e.props.scroll.bodyRows} />
   })
 
   on('prompt.submit', async ($, e, next) => {

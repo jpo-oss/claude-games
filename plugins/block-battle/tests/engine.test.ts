@@ -27,7 +27,7 @@ function drop(g: Game, inputs: Input[] = ['hardDrop']) {
 const sortCells = (c: number[][]) => c.slice().sort((p, q) => p[1]! - q[1]! || p[0]! - q[0]!)
 const types = (events: GameEvent[]) => events.map(e => e.type)
 
-// k filled rows with a one-wide well at column 9; a tetris keeps a fifth row so it is not a perfect clear.
+// k filled rows with a one-wide well at column 9; a quad keeps a fifth row so it is not a perfect clear.
 const WELL = (k: number, keepOneRow = false) => {
   const rows: Record<number, string> = {}
   for (let r = 40 - k - (keepOneRow ? 1 : 0); r < 40; r++) rows[r] = 'XXXXXXXXX.'
@@ -275,8 +275,8 @@ test('hold: swaps once per piece, canHold returns after a lock', () => {
   expect(swap.hold).toBe(third)
 })
 
-test('scoring: single, double, triple, tetris', () => {
-  const kinds = ['single', 'double', 'triple', 'tetris']
+test('scoring: single, double, triple, quad', () => {
+  const kinds = ['single', 'double', 'triple', 'quad']
   const scores = [100, 300, 500, 800]
   for (let k = 1; k <= 4; k++) {
     const d = drop(mk(WELL(k, k === 4), I_WELL))
@@ -364,7 +364,7 @@ test('combo bonus grows with the combo and the level', () => {
   expect(d.game.score).toBe(200 + 50 * 4 * 2)
 })
 
-test('back-to-back: second tetris is x1.5, and a combo is stacked on top', () => {
+test('back-to-back: second quad is x1.5, and a combo is stacked on top', () => {
   const rows = WELL(9)
   const first = drop(mk(rows, I_WELL))
   expect(first.ev!.b2b).toBe(false)
@@ -384,12 +384,12 @@ test('back-to-back: a plain single breaks it, a zero-line T-spin keeps it', () =
   expect(kept.game.b2b).toBe(true)
 })
 
-test('back-to-back: a T-spin double followed by a tetris scores 1200 for the tetris', () => {
+test('back-to-back: a T-spin double followed by a quad scores 1200 for the quad', () => {
   const g = mk(WELL(4, true), I_WELL, { b2b: true })
   expect(drop(g).game.score).toBe(1200)
 })
 
-test('perfect clear bonuses: single 800, double 1200, triple 1800, tetris 2000, b2b tetris 3200', () => {
+test('perfect clear bonuses: single 800, double 1200, triple 1800, quad 2000, b2b quad 3200', () => {
   const single = drop(mk({ 39: I_FLAT_ROW }, I_FLAT))
   expect(single.ev!.perfectClear).toBe(true)
   expect(single.game.score).toBe(100 + 800)
@@ -398,9 +398,9 @@ test('perfect clear bonuses: single 800, double 1200, triple 1800, tetris 2000, 
   const triple = drop(mk({ 37: 'XXXXXXXX.X', 38: 'XXXXXXXX.X', 39: 'XXXXXXXX..' }, A('L', 1, 7, 37)))
   expect(triple.ev!.kind).toBe('triple')
   expect(triple.game.score).toBe(500 + 1800)
-  const tetris = drop(mk(WELL(4), I_WELL))
-  expect(tetris.ev!.perfectClear).toBe(true)
-  expect(tetris.game.score).toBe(800 + 2000)
+  const quad = drop(mk(WELL(4), I_WELL))
+  expect(quad.ev!.perfectClear).toBe(true)
+  expect(quad.game.score).toBe(800 + 2000)
   const b2b = drop(mk(WELL(4), I_WELL, { b2b: true }))
   expect(b2b.game.score).toBe(1200 + 3200)
 })

@@ -4,7 +4,7 @@ export type Mode = 'marathon' | 'battle'
 export type Input =
   | 'left' | 'right' | 'softDropOn' | 'softDropOff' | 'softDropStep' | 'hardDrop'
   | 'rotateCW' | 'rotateCCW' | 'rotate180' | 'hold'
-export type ClearKind = 'single' | 'double' | 'triple' | 'tetris'
+export type ClearKind = 'single' | 'double' | 'triple' | 'quad'
   | 'tspinMini' | 'tspinMiniSingle' | 'tspinMiniDouble'
   | 'tspin' | 'tspinSingle' | 'tspinDouble' | 'tspinTriple'
 export type GameEvent =
@@ -83,18 +83,18 @@ const KICK_180: Record<string, Pt[]> = {
 }
 
 const LINE_SCORE: Record<ClearKind, number> = {
-  single: 100, double: 300, triple: 500, tetris: 800,
+  single: 100, double: 300, triple: 500, quad: 800,
   tspinMini: 100, tspinMiniSingle: 200, tspinMiniDouble: 400,
   tspin: 400, tspinSingle: 800, tspinDouble: 1200, tspinTriple: 1600,
 }
 const LINE_ATTACK: Record<ClearKind, number> = {
-  single: 0, double: 1, triple: 2, tetris: 4,
+  single: 0, double: 1, triple: 2, quad: 4,
   tspinMini: 0, tspinMiniSingle: 0, tspinMiniDouble: 1,
   tspin: 0, tspinSingle: 2, tspinDouble: 4, tspinTriple: 6,
 }
 const COMBO_ATTACK = [0, 0, 1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5]
 const PC_SCORE = [0, 800, 1200, 1800, 2000]
-const PC_B2B_TETRIS = 3200
+const PC_B2B_QUAD = 3200
 const PC_ATTACK = 10
 
 function mix(s: number): number {
@@ -305,13 +305,13 @@ function lockPiece(g: Game, events: GameEvent[]) {
 
   const level = g.level
   let kind: ClearKind | null = null
-  if (spin === 'none') kind = n === 0 ? null : (['single', 'double', 'triple', 'tetris'] as const)[n - 1]!
+  if (spin === 'none') kind = n === 0 ? null : (['single', 'double', 'triple', 'quad'] as const)[n - 1]!
   else if (spin === 'mini') kind = (['tspinMini', 'tspinMiniSingle', 'tspinMiniDouble', 'tspinTriple'] as const)[n]!
   else kind = (['tspin', 'tspinSingle', 'tspinDouble', 'tspinTriple'] as const)[n]!
 
   let attack = 0
   if (kind) {
-    const difficult = n > 0 && (kind === 'tetris' || spin !== 'none')
+    const difficult = n > 0 && (kind === 'quad' || spin !== 'none')
     const b2bApplied = difficult && g.b2b
     let points = Math.floor(LINE_SCORE[kind] * level * (b2bApplied ? 1.5 : 1))
     let perfect = false
@@ -319,7 +319,7 @@ function lockPiece(g: Game, events: GameEvent[]) {
       g.combo++
       points += 50 * g.combo * level
       perfect = g.board.every(r => r.every(c => c == null))
-      if (perfect) points += (n === 4 && b2bApplied ? PC_B2B_TETRIS : PC_SCORE[n]!) * level
+      if (perfect) points += (n === 4 && b2bApplied ? PC_B2B_QUAD : PC_SCORE[n]!) * level
       g.b2b = difficult
       if (g.mode === 'battle') {
         attack = perfect

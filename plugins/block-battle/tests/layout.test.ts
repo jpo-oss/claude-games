@@ -6,7 +6,7 @@ import { flatten, natural } from './render'
 
 declare const console: { log: (s: string) => void }
 
-const PANE = { title: 'Tetris', isFocused: true, bodyColumns: 100, placement: 'inline' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} }
+const PANE = { title: 'Block Battle', isFocused: true, bodyColumns: 100, placement: 'inline' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} }
 const target = { plugin: 'block-battle', surface: 'terminal', component: 'Pane', props: PANE, requestId: 'block-battle', viewport: { columns: 100, rows: 60 } } as const
 type Ui = Mounted<'terminal', 'Pane'>
 
@@ -30,7 +30,7 @@ function serve(on: On) {
 
 async function open($: Engine, size: SizeName): Promise<Ui> {
   const ui = await $.ui.mount(target)
-  await ui.resize({ ...SIZES[size], in: 'tetris' })
+  await ui.resize({ ...SIZES[size], in: 'game' })
   await ui.advance(32)
 
   return ui
@@ -39,7 +39,7 @@ async function open($: Engine, size: SizeName): Promise<Ui> {
 // Lines of the drawn Client, laid out in its region, with a ruler so clipping and misalignment show.
 async function screen(ui: Ui, size: SizeName): Promise<string[]> {
   const { columns, rows } = SIZES[size]
-  const tree = await ui.drawn({ in: 'tetris' })
+  const tree = await ui.drawn({ in: 'game' })
   const nat = natural(tree)
   // tiny is smaller than any layout: only the too-small note, which a real terminal wraps
   if (size !== 'tiny') {
@@ -49,7 +49,7 @@ async function screen(ui: Ui, size: SizeName): Promise<string[]> {
     // The dump clips here and a real terminal wraps, so check the content itself: the too-small
     // note on the game screens, the screen's own heading on the menus.
     const drawn = JSON.stringify(tree)
-    expect(['Too small for Tetris', 'Marathon', 'BATTLE', 'MARATHON TOP'].some(word => drawn.includes(word))).toBe(true)
+    expect(['Too small for Block Battle', 'Marathon', 'BATTLE', 'MARATHON TOP'].some(word => drawn.includes(word))).toBe(true)
   }
   const lines = flatten(tree, columns, rows)
   const out = [`+${'-'.repeat(columns)}+  region ${columns}x${rows}, drawn ${nat.w}x${nat.h}`]
