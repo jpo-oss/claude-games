@@ -15,7 +15,17 @@ Updates aren't automatic for community marketplaces. Run `/plugin update <game>@
 
 ## Games
 
-Coming soon: Block Battle, a falling-block puzzle with solo Marathon and 1v1 battles.
+### Block Battle
+
+A falling-block puzzle. Play solo Marathon, battle other players 1v1, and climb the leaderboard.
+
+```
+/plugin install block-battle@claude-games
+```
+
+Run `/block-battle` and click the pane to start. Left and right move, down drops faster, space drops all the way. Up or x rotates, z rotates the other way, a flips, c holds. p pauses Marathon, q goes back to the menu.
+
+Battles and the leaderboard need a one-time GitHub sign-in. It asks for no permissions, so the server only learns your public username.
 
 ## Servers
 

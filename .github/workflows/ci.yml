@@ -18,3 +18,5 @@ jobs:
           node-version: lts/*
       - run: npm install -g @anthropic-ai/claude-code@latest
       - run: claude plugin validate .
+      - name: Test each game
+        run: for dir in plugins/*/; do claude plugin test "$dir"; done

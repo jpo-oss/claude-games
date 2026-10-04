@@ -73,7 +73,7 @@ Everything the internal version has stays:
 
 - Modern rules: 7-bag, hold, SRS kicks, T-spins, back-to-back, combos, lock delay with move reset.
 - Marathon (solo), Battle (1v1 with garbage), and a leaderboard (top 5 Marathon scores, top 5 battle wins).
-- A nudge when a Claude turn has run for 2 minutes, and a notice when Claude finishes or asks a question.
+- A nudge when a Claude turn has run for 2 minutes. It waits while Claude is asking the player a question.
 
 What changes:
 
