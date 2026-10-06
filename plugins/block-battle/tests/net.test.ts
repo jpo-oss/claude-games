@@ -13,6 +13,7 @@ import {
   parseQueue,
   parseSync,
   queueAttacks,
+  serverUrlOk,
 } from '../hooks/net'
 
 // Expected values are written out by hand from the server's routes, not derived from the builders.
@@ -170,4 +171,30 @@ test('server error text is cleaned and capped', async () => {
     expect(r.error).not.toMatch(/[\u0000-\u001f\u007f]/)
     expect(r.error.length).toBeLessThanOrEqual(120)
   }
+})
+
+test('only https servers, or http on this machine', () => {
+  expect(serverUrlOk('https://games.example')).toBe(true)
+  expect(serverUrlOk('http://localhost:8787')).toBe(true)
+  expect(serverUrlOk('http://127.0.0.1:8787')).toBe(true)
+  expect(serverUrlOk('http://example.com')).toBe(false)
+  expect(serverUrlOk('http://localhost.example.com')).toBe(false)
+  expect(serverUrlOk('ftp://x')).toBe(false)
+  expect(serverUrlOk('not a url')).toBe(false)
+})
+
+test('a request that never answers gives up as unreachable', async () => {
+  const never: Fetch = () => new Promise(() => undefined)
+  const r = await call(never, 'https://s', 'GET', '/x', 't', undefined, () => Promise.resolve())
+  expect(r).toEqual({ ok: false, status: 0, error: 'unreachable' })
+})
+
+test('an answered request cancels its give-up timer', async () => {
+  let aborted = false
+  const ok: Fetch = async () => ({ status: 200, ok: true, headers: {}, text: '{}' })
+  await call(ok, 'https://s', 'GET', '/x', 't', undefined, signal => {
+    signal.addEventListener('abort', () => (aborted = true))
+    return new Promise(() => undefined)
+  })
+  expect(aborted).toBe(true)
 })

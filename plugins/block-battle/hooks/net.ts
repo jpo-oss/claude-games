@@ -10,6 +10,15 @@ export const MAX_INCOMING = 60
 
 export const PROTOCOL_VERSION = 1
 
+export function serverUrlOk(u: string): boolean {
+  try {
+    const url = new URL(u)
+    return url.protocol === 'https:' || (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'))
+  } catch {
+    return false
+  }
+}
+
 export function buildRequest(
   base: string,
   method: 'GET' | 'POST' | 'DELETE',
@@ -37,10 +46,17 @@ export async function call(
   path: string,
   token: string | null,
   body?: unknown,
+  giveUp: (signal: AbortSignal) => Promise<void> = () => new Promise(() => undefined),
 ): Promise<Reply<unknown>> {
   const { url, init } = buildRequest(base, method, path, token, body)
+  const stop = new AbortController()
+  const timedOut = giveUp(stop.signal).then(
+    () => null,
+    () => new Promise<never>(() => undefined),
+  )
   try {
-    const res = await fetch(url, init)
+    const res = await Promise.race([fetch(url, init), timedOut])
+    if (res === null) return { ok: false, status: 0, error: 'unreachable' }
     let data: unknown = null
     try {
       data = JSON.parse(res.text)
@@ -53,6 +69,8 @@ export async function call(
     return { ok: false, status: res.status, error: typeof error === 'string' ? cleanText(error) : `HTTP ${res.status}` }
   } catch {
     return { ok: false, status: 0, error: 'unreachable' }
+  } finally {
+    stop.abort()
   }
 }
 

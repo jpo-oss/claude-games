@@ -15,6 +15,7 @@ import {
   parseQueue,
   parseSync,
   queueAttacks,
+  serverUrlOk,
 } from './net'
 import type { Outbox, Reply } from './net'
 
@@ -33,6 +34,8 @@ const DOWN = 'Game server unreachable. Solo play still works.'
 const SIGNED_OUT = 'Signed out. Pick Battle or Leaderboard to sign in again.'
 const OUTDATED = 'Block Battle is out of date. Run /plugin update block-battle@claude-games'
 const SIGNING_IN = 'Signing in with GitHub...'
+const BAD_URL = 'The server address must start with https://. Change it in the plugin settings.'
+const TIMEOUT_MS = 30_000
 const NO_GITHUB = "Couldn't reach GitHub to sign in. Solo play still works."
 const CANCELLED = 'Sign-in was cancelled or expired. Pick Battle or Leaderboard to try again.'
 const signInLine = (uri: string, code: string) => `Sign in: open ${uri} and enter ${code}`
@@ -137,7 +140,7 @@ async function startSignIn($: EngineInterface) {
         }
         if (poll.kind === 'failed') return end(poll.reason === 'error' ? NO_GITHUB : CANCELLED)
         await setView($, { notice: SIGNING_IN })
-        const r = await call(fetch, rt.base, 'POST', '/v1/session', null, { githubToken: poll.token })
+        const r = await call(fetch, rt.base, 'POST', '/v1/session', null, { githubToken: poll.token }, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
         if (!live()) return
         const s = r.ok ? parseSession(r.data) : null
         if (!s) return end(r.ok ? DOWN : noticeFor(r))
@@ -157,18 +160,26 @@ async function startSignIn($: EngineInterface) {
 }
 
 async function api($: EngineInterface, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<Reply<unknown>> {
+  if (!serverUrlOk(rt.base)) return { ok: false, status: -2, error: BAD_URL }
   const s = await loadSession($)
   if (s === null) {
     void startSignIn($)
     return { ok: false, status: -1, error: rt.signInLine ?? SIGNING_IN }
   }
-  const reply = await call((url, init) => $.http.fetch(url, init), rt.base, method, path, s.session, body)
+  const reply = await call((url, init) => $.http.fetch(url, init), rt.base, method, path, s.session, body, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
   if (!reply.ok && reply.status === 401) await dropSession($)
 
   return reply
 }
 
-const fail = (r: { status: number; error: string }) => (r.status === -1 ? r.error : noticeFor(r))
+function resultFor(winner: string, me: string | null): 'win' | 'loss' | null {
+  if (me !== null && winner === me) return 'win'
+  if (winner === rt.opponentLogin) return 'loss'
+
+  return null
+}
+
+const fail = (r: { status: number; error: string }) => (r.status < 0 ? r.error : noticeFor(r))
 
 async function loadLeaderboard($: EngineInterface) {
   const r = await api($, 'GET', '/v1/leaderboard')
@@ -269,7 +280,7 @@ async function flushSync($: EngineInterface) {
   rt.isSyncing = true
   try {
     const { seq, attacks } = nextPayload(rt.outbox)
-    const r = await api($, 'POST', `/v1/battle/${battle.roomId}/sync`, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver })
+    const r = await api($, 'POST', `/v1/battle/${encodeURIComponent(battle.roomId)}/sync`, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver })
     if (!r.ok) {
       if (r.status === 404 || r.status === 403) {
         await setBattle($, { status: 'ended', result: null })
@@ -293,7 +304,7 @@ async function flushSync($: EngineInterface) {
         ...v.battle,
         opponent: s.opponent ?? v.battle.opponent,
         incoming: mergeIncoming(v.battle.incoming, s.incoming),
-        ...(s.winner === null ? {} : { status: 'ended' as const, result: s.winner === rt.opponentLogin ? ('loss' as const) : ('win' as const) }),
+        ...(s.winner === null ? {} : { status: 'ended' as const, result: resultFor(s.winner, v.me) }),
       },
     }))
   } finally {

@@ -485,3 +485,42 @@ test('a session saved for another server is ignored after switching servers', { 
   expect(seen.some(r => r.auth === 'Bearer sess_1')).toBe(false)
   expect(seen.some(r => r.url === 'https://github.com/login/device/code')).toBe(true)
 })
+
+test('an http server address is refused before any request', { options: { serverUrl: 'http://example.com' } }, async ($: Engine, on: On) => {
+  mock.clock(on)
+  const { seen } = github(on, [], () => ({ status: 200, body: EMPTY_LEADERBOARD }), SIGNED_IN)
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  expect(seen).toHaveLength(0)
+  expect(await shown(ui)).toContain('must start with https://')
+})
+
+test('a winner who is neither player is not shown as a win', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: 'mallory' } } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  for (let i = 0; i < 6; i++) await ui.advance(200)
+  expect(await shown(ui)).not.toContain('YOU WIN')
+})
+
+test('a battle the player really won shows a win', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: 'alice' } } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  for (let i = 0; i < 6; i++) await ui.advance(200)
+  expect(await shown(ui)).toContain('YOU WIN')
+})
