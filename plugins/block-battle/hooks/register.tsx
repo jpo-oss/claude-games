@@ -12,12 +12,15 @@ import {
   nextPayload,
   parseClientMsg,
   parseLeaderboard,
+  parseMarathonStart,
   parseQueue,
   parseSync,
   queueAttacks,
   serverUrlOk,
 } from './net'
 import type { Outbox, Reply } from './net'
+import { takeChunk } from './log'
+import type { Assembly, LogMsg } from './log'
 
 const PANE = 'block-battle'
 const NUDGE_MS = 120_000
@@ -79,6 +82,12 @@ const rt: {
   nudge: Timer | null
   isTurnOn: boolean
   wasNudged: boolean
+  // Logs are only taken for marathon game ids the server handed out and rooms we were matched in.
+  games: string[]
+  rooms: string[]
+  asm: Assembly | null
+  sentKeys: string[]
+  wantsSync: boolean
 } = {
   base: OFFICIAL,
   home: OFFICIAL,
@@ -99,6 +108,11 @@ const rt: {
   nudge: null,
   isTurnOn: false,
   wasNudged: false,
+  games: [],
+  rooms: [],
+  asm: null,
+  sentKeys: [],
+  wantsSync: false,
 }
 
 const setView = ($: EngineInterface, patch: Partial<GameView>) => update($, view, v => ({ ...v, ...patch }))
@@ -303,6 +317,7 @@ async function pollQueue($: EngineInterface, startedAt: number) {
     if (q?.status === 'matched' && rt.queueTimer !== null) {
       stopQueue()
       rt.opponentLogin = q.opponent
+      rt.rooms = [...rt.rooms, q.roomId].slice(-8)
       rt.lastSyncOk = await $.clock.now()
       // Room for the big board and the opponent's beside it; a width the person dragged still wins.
       $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
@@ -339,9 +354,9 @@ async function flushSync($: EngineInterface) {
     const r = await api($, 'POST', `/v1/battle/${encodeURIComponent(battle.roomId)}/sync`, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver })
     if (!r.ok) {
       if (r.status === 404 || r.status === 403) await endMatch($, 'The match is no longer available.')
-      else if (r.status === 410) await endMatch($, 'Match cancelled: your opponent left before it started.')
       else if (r.status === 401) await endMatch($, fail(r))
       else if (r.status === 0 && (await $.clock.now()) - rt.lastSyncOk >= TIMEOUT_MS) await endMatch($, DOWN)
+      else if (r.status === 0 && rt.latest.isOver) $.clock.after(1_000, () => void flushSync($))
 
       return
     }
@@ -349,6 +364,7 @@ async function flushSync($: EngineInterface) {
     rt.lastSyncOk = await $.clock.now()
     const s = parseSync(r.data)
     if (!s) return
+    if (!s.ended && rt.latest.isOver) rt.wantsSync = true
     if (s.ended && (s.winner === null || resultFor(s.winner, (await read($, view)).me) === null)) return endMatch($, 'The match ended with no result.')
     await update($, view, v => ({
       ...v,
@@ -356,17 +372,64 @@ async function flushSync($: EngineInterface) {
         ...v.battle,
         opponent: s.opponent ?? v.battle.opponent,
         incoming: mergeIncoming(v.battle.incoming, s.incoming),
-        ...(!s.ended ? {} : { status: 'ended' as const, result: resultFor(s.winner as string, v.me) }),
+        ...(s.ended ? { status: 'ended' as const, result: resultFor(s.winner!, v.me) } : {}),
       },
     }))
   } finally {
     rt.isSyncing = false
+    if (rt.wantsSync) {
+      rt.wantsSync = false
+      void flushSync($)
+    }
   }
 }
 
 async function endMatch($: EngineInterface, notice: string) {
   await resetBattle($, false)
   await setView($, { notice })
+}
+
+async function startMarathon($: EngineInterface, nonce: number) {
+  await setView($, { notice: null })
+  await resetBattle($, true)
+  let gameId: string | null = null
+  let seed = 0
+  if (serverUrlOk(rt.base) && (await loadSession($)) !== null) {
+    const r = await api($, 'POST', '/v1/marathon')
+    const g = r.ok ? parseMarathonStart(r.data) : null
+    if (g) {
+      ;({ gameId, seed } = g)
+      rt.games = [...rt.games, g.gameId].slice(-8)
+    }
+  }
+  await setView($, { marathon: { nonce, gameId, seed } })
+}
+
+// Retries only when the server could not answer (status 0) or said 503.
+async function sendLog($: EngineInterface, path: string, body: unknown, tries: number, waitMs: number): Promise<Reply<unknown>> {
+  for (let i = 1; ; i++) {
+    const r = await api($, 'POST', path, body)
+    if (r.ok || (r.status !== 0 && r.status !== 503) || i >= tries) return r
+    await $.clock.sleep(waitMs)
+  }
+}
+
+async function takeLog($: EngineInterface, m: LogMsg) {
+  const allowed = m.kind === 'marathon' ? rt.games.includes(m.key) : rt.rooms.includes(m.key)
+  if (!allowed) return
+  const r = takeChunk(rt.asm, m)
+  rt.asm = r.asm
+  await setView($, { uploaded: { key: m.key, have: r.have } })
+  if (!r.log || rt.sentKeys.includes(m.key)) return
+  rt.sentKeys = [...rt.sentKeys, m.key].slice(-8)
+  if (m.kind === 'marathon') {
+    const res = await sendLog($, '/v1/scores', { gameId: m.key, log: r.log }, 3, 5_000)
+    const board = res.ok ? parseLeaderboard(res.data) : null
+    if (board) await setView($, { leaderboard: board })
+  } else {
+    // The server waits 30 s for the winner's log.
+    await sendLog($, `/v1/battle/${encodeURIComponent(m.key)}/log`, { log: r.log }, 5, 3_000)
+  }
 }
 
 async function handle($: EngineInterface, m: ClientMsg) {
@@ -378,19 +441,21 @@ async function handle($: EngineInterface, m: ClientMsg) {
 
       return startQueue($)
     }
-    if (m.choice === 'marathon') {
-      await setView($, { notice: null })
-
-      return resetBattle($, true)
-    }
+    if (m.choice === 'marathon') return startMarathon($, m.nonce)
 
     return resetBattle($, true)
   }
+  if (m.type === 'log') return takeLog($, m)
   if (m.type !== 'sync') return
   const { battle } = await read($, view)
   if (battle.status !== 'matched') return
   rt.latest = { snapshot: m.snapshot, isOver: m.isOver }
   queueAttacks(rt.outbox, m.attacks)
+  if (rt.isSyncing) {
+    rt.wantsSync = true
+
+    return
+  }
 
   return flushSync($)
 }

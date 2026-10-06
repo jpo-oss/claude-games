@@ -1,3 +1,4 @@
+import type { ClientMsg } from '../types'
 import type { Input } from './engine'
 
 export const STEP_MS = 16
@@ -70,16 +71,7 @@ export function toUpload(kind: Upload['kind'], key: string, rec: Recorder): Uplo
   return { kind, key, steps: rec.steps, inputsLen: rec.inputs.length, stream: [...rec.inputs, ...rec.garbage] }
 }
 
-export type LogMsg = {
-  type: 'log'
-  kind: Upload['kind']
-  key: string
-  steps: number
-  inputsLen: number
-  total: number
-  at: number
-  values: number[]
-}
+export type LogMsg = Extract<ClientMsg, { type: 'log' }>
 
 export const chunkAt = (u: Upload, at: number): LogMsg => ({
   type: 'log', kind: u.kind, key: u.key, steps: u.steps, inputsLen: u.inputsLen, total: u.stream.length, at, values: u.stream.slice(at, at + CHUNK),
