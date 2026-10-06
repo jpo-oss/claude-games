@@ -25,6 +25,10 @@ claude --plugin-dir plugins/<game>
 - Bump the game's `version` in `plugin.json` if players should get the change.
 - Use Conventional Commit style for the PR title, e.g. `fix(block-battle): hold works after game over`.
 
+## Releases
+
+Merging your PR doesn't ship it to players. A maintainer cuts a release later, which pins the game to a tagged commit. See "Releasing" in [AGENTS.md](AGENTS.md).
+
 ## AI-assisted contributions
 
 Using AI tools is fine. We use them too. The rules:
