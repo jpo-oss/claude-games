@@ -105,6 +105,19 @@ async function dropSession($: EngineInterface) {
   await setView($, { me: null })
 }
 
+async function signOut($: EngineInterface): Promise<string> {
+  const s = await loadSession($)
+  if (s === null) return 'Not signed in to this server.'
+  if (serverUrlOk(rt.base)) {
+    await call((url, init) => $.http.fetch(url, init), rt.base, 'DELETE', '/v1/session', s.session, undefined, signal =>
+      $.clock.sleep(TIMEOUT_MS, { signal }),
+    )
+  }
+  await dropSession($)
+
+  return 'Signed out of Block Battle.'
+}
+
 async function startSignIn($: EngineInterface) {
   if (rt.isSigningIn) return
   rt.isSigningIn = true
@@ -357,12 +370,13 @@ export const register: Register = (on, options) => {
   rt.base = typeof options.serverUrl === 'string' && options.serverUrl !== '' ? options.serverUrl : rt.base
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'cg-block-battle', description: 'Play Block Battle while Claude works: Marathon, 1v1 battles, leaderboard' })
+    await $.command.register({ name: 'cg-block-battle', description: 'Play Block Battle while Claude works. Add "signout" to sign out' })
 
     return next(e)
   })
 
-  on('command.run', { command: 'cg-block-battle' }, async $ => {
+  on('command.run', { command: 'cg-block-battle' }, async ($, e) => {
+    if (e.args.trim() === 'signout') return { text: await signOut($) }
     await resetBattle($, true)
     await setView($, { notice: null })
     const opened = await $.ui.open({ id: PANE, title: 'Block Battle', focus: true, closeOnEscape: true, holdToasts: true, columns: 66, rows: 46 })

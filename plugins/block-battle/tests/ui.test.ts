@@ -543,3 +543,21 @@ test('a server with no sign-in app says so', async ($: Engine, on: On) => {
   expect(await shown(ui)).toContain("isn't set up for sign-in")
   expect(seen.some(r => r.url.startsWith('https://github.com/'))).toBe(false)
 })
+
+test('/cg-block-battle signout revokes the session and forgets it', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const { seen, saves } = github(on, [], () => ({ status: 204, body: {} }), SIGNED_IN)
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const ran = await $.command.run({ command: 'cg-block-battle', args: 'signout' })
+  expect(JSON.stringify(ran)).toContain('Signed out')
+  expect(seen.find(r => r.url.endsWith('/v1/session'))).toMatchObject({ method: 'DELETE', auth: 'Bearer sess_1' })
+  expect(saves.has('session:https://games.jpoapps.com')).toBe(false)
+})
+
+test('signing out with no session still answers', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const { seen } = github(on, [], () => ({ status: 204, body: {} }))
+  const ran = await $.command.run({ command: 'cg-block-battle', args: 'signout' })
+  expect(JSON.stringify(ran)).toContain('Not signed in')
+  expect(seen).toHaveLength(0)
+})
