@@ -31,7 +31,26 @@ Things that bite:
 
 1. Create `plugins/<game>/` with `.claude-plugin/plugin.json`, `hooks/hooks.json` and the hooks module.
 2. Add it to `.claude-plugin/marketplace.json`. The `name` there must match `plugin.json`.
-3. Bump `version` in `plugin.json` on every release, or players won't get the update.
+3. Name its slash command `cg-<game>` (Block Battle is `/cg-block-battle`) so it can't clash with other plugins' commands.
+4. Bump `version` in `plugin.json` on every release, or players won't get the update.
+
+## Releasing
+
+Players install from a pinned release, not from `main`. Merging to `main` ships nothing.
+
+1. Bump `version` in the game's `plugin.json` in a normal PR and merge it.
+2. Tag the merge commit `<game>-v<version>` (for example `block-battle-v0.2.0`) and push the tag.
+3. Open a release PR that points the game's entry in `.claude-plugin/marketplace.json` at that tag and commit:
+
+```json
+{
+  "name": "block-battle",
+  "source": { "source": "git-subdir", "url": "jpo-oss/claude-games", "path": "plugins/block-battle", "ref": "block-battle-v0.2.0", "sha": "<full 40-character commit>" },
+  "description": "..."
+}
+```
+
+Until the first release, the entry is a relative path. The first release makes the switch.
 
 ## Rules
 

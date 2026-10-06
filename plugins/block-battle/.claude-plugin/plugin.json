@@ -1,0 +1,17 @@
+{
+  "name": "block-battle",
+  "version": "0.1.0",
+  "description": "Falling-block puzzle inside Claude Code: solo Marathon, 1v1 battles and a leaderboard while a long task runs",
+  "author": { "name": "JustPressOne Inc." },
+  "license": "MIT",
+  "repository": "https://github.com/jpo-oss/claude-games",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "serverUrl": {
+      "type": "string",
+      "title": "Game server URL",
+      "description": "The server for battles and the leaderboard. Each server has its own leaderboard.",
+      "default": "https://games.jpoapps.com"
+    }
+  }
+}
