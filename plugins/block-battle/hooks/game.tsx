@@ -397,20 +397,16 @@ function tick(live: Live) {
     }
     if (ageFx(live.fx, dt)) dirty = true
 
-    if (now.isOver && !live.hasPostedOver) {
-      live.hasPostedOver = true
-      if (live.mode === 'marathon') queueUpload(live, 'marathon')
-      else {
-        live.outbox.push({ type: 'sync', seq: ++live.seq, attacks: live.attacks.splice(0), snapshot: snapshot(now), isOver: true })
-      }
-    }
-    if (live.mode === 'battle' && !now.isOver && !live.result) {
+    if (now.isOver && !live.hasPostedOver && live.mode === 'marathon') queueUpload(live, 'marathon')
+    // The top-out is posted again until a result comes: one lost post must not leave the hooks unaware.
+    if (live.mode === 'battle' && !live.result) {
       live.syncMs += dt
-      if (live.syncMs >= SYNC_MS) {
+      if (live.syncMs >= SYNC_MS || (now.isOver && !live.hasPostedOver)) {
         live.syncMs = 0
-        live.outbox.push({ type: 'sync', seq: ++live.seq, attacks: live.attacks.splice(0), snapshot: snapshot(now), isOver: false })
+        live.outbox.push({ type: 'sync', seq: ++live.seq, attacks: live.attacks.splice(0), snapshot: snapshot(now), isOver: now.isOver })
       }
     }
+    if (now.isOver) live.hasPostedOver = true
   } else if (live.screen === 'lobby') {
     if (live.t % 320 < dt) dirty = true
   }

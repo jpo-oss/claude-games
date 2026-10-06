@@ -1011,3 +1011,29 @@ test('Enter on the Starting screen does not cancel the game it asked for; q does
   release()
   await ui.advance(48)
 })
+
+test('battle: the top-out is posted again until the result comes', async ($: Engine, on: On) => {
+  // The hooks' own retry timer only runs on the mock clock, which stays put: every isOver sync here comes from a Client post.
+  mock.clock(on)
+  let hasResult = false
+  const seen = serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    return { status: 200, body: { opponent: OPPONENT, incoming: [], ...(hasResult ? { result: { winner: 'bob' } } : {}) } }
+  })
+  const overs = () => seen.filter(r => (r.body as { isOver?: boolean } | undefined)?.isOver === true).length
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  await topOut(ui)
+  const first = overs()
+  expect(first).toBeGreaterThan(0)
+  for (let i = 0; i < 5; i++) await ui.advance(200)
+  expect(overs()).toBeGreaterThanOrEqual(first + 4)
+  hasResult = true
+  for (let i = 0; i < 3; i++) await ui.advance(200)
+  const settled = overs()
+  for (let i = 0; i < 5; i++) await ui.advance(200)
+  expect(overs()).toBe(settled)
+})
