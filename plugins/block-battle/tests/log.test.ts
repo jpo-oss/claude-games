@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { newGame, receiveGarbage, step } from '../hooks/engine'
 import type { Input } from '../hooks/engine'
-import { CHUNK, INPUT_NAMES, chunkAt, newPace, newRecorder, recordGarbage, recordStep, stepsDue, takeChunk, toUpload } from '../hooks/log'
+import { CHUNK, INPUT_NAMES, chunkAt, newPace, newRecorder, newSender, nextSend, recordGarbage, recordStep, stepsDue, takeChunk, toUpload } from '../hooks/log'
 import type { Assembly, GameLog } from '../hooks/log'
 
 // The server's replay (claude-games-server src/replay.ts), reduced to what the wire form decodes to.
@@ -140,4 +140,25 @@ test('takeChunk refuses values that are not whole numbers and a new key restarts
   expect(first.have).toBe(2)
   const other = takeChunk(first.asm, { ...base, key: 'g2', values: [0, 3] })
   expect(other.log).toEqual({ steps: 1, inputs: [0, 3] })
+})
+
+test('nextSend re-sends every 250 ms, resets on progress and gives up after about 10 s stuck', () => {
+  const s = newSender()
+  expect(nextSend(s, 0)).toBe('send')
+  const ticks = (have: number) => {
+    const out: string[] = []
+    for (let i = 0; i < 16; i++) out.push(nextSend(s, have))
+    return out
+  }
+  expect(ticks(0)).toEqual([...Array(15).fill('wait'), 'send'])
+  // progress sends at once and clears the count
+  expect(nextSend(s, 100)).toBe('send')
+  let sends = 0
+  let result = ''
+  for (let i = 0; i < 2_000 && result === ''; i++) {
+    const r = nextSend(s, 100)
+    if (r === 'send') sends++
+    if (r === 'drop') result = `dropped after ${sends} re-sends, ${(i + 1) * 16} ms`
+  }
+  expect(result).toBe('dropped after 39 re-sends, 10240 ms')
 })

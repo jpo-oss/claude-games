@@ -71,6 +71,26 @@ export function toUpload(kind: Upload['kind'], key: string, rec: Recorder): Uplo
   return { kind, key, steps: rec.steps, inputsLen: rec.inputs.length, stream: [...rec.inputs, ...rec.garbage] }
 }
 
+const RESEND_MS = 250
+// About 10 s of re-sends with no progress: the hooks will never take this upload.
+const MAX_STALLS = 40
+
+export type Sender = { lastAck: number; waitMs: number; stalls: number }
+
+export const newSender = (): Sender => ({ lastAck: -1, waitMs: 0, stalls: 0 })
+
+// Called once per tick with the position the hooks acknowledged for the upload being sent.
+export function nextSend(s: Sender, have: number): 'wait' | 'send' | 'drop' {
+  s.waitMs += STEP_MS
+  if (have === s.lastAck && s.waitMs < RESEND_MS) return 'wait'
+  s.stalls = have === s.lastAck ? s.stalls + 1 : 0
+  if (s.stalls >= MAX_STALLS) return 'drop'
+  s.lastAck = have
+  s.waitMs = 0
+
+  return 'send'
+}
+
 export type LogMsg = Extract<ClientMsg, { type: 'log' }>
 
 export const chunkAt = (u: Upload, at: number): LogMsg => ({

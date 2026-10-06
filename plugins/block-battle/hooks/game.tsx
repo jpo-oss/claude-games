@@ -5,15 +5,14 @@ import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_
 import type { Ch, Fx, Label, Overlay, Size } from './draw'
 import { newGame, receiveGarbage, snapshot, step } from './engine'
 import type { Game, GameEvent, Input, Mode } from './engine'
-import { STEP_MS, chunkAt, newPace, newRecorder, recordGarbage, recordStep, stepsDue, toUpload } from './log'
-import type { LogMsg, Pace, Recorder, Upload } from './log'
+import { STEP_MS, chunkAt, newPace, newRecorder, newSender, nextSend, recordGarbage, recordStep, stepsDue, toUpload } from './log'
+import type { LogMsg, Pace, Recorder, Sender, Upload } from './log'
 import { serverUrlOk } from './net'
 
 // Rows per down press; tuned by feel (1 was too slow). A step stops at the floor, so more never locks.
 const SOFT_DROP_ROWS = 2
 const SYNC_MS = 200
 const START_WAIT_MS = 3_000
-const UPLOAD_RESEND_MS = 250
 
 type Screen = 'menu' | 'servers' | 'lobby' | 'play' | 'leaderboard' | 'starting'
 
@@ -34,8 +33,7 @@ type Live = {
   nonce: number
   waitMs: number
   uploads: Upload[]
-  uploadMs: number
-  lastAck: number
+  sender: Sender
   hasSentLog: boolean
   isPaused: boolean
   fx: Fx
@@ -74,7 +72,7 @@ const emptyProps = (): GameView => ({
 
 const newLive = (props: GameView): Live => ({
   props, rev: 0, screen: 'menu', menu: 0, mode: 'marathon', game: null, inputs: [], t: 0,
-  pace: newPace(), rec: newRecorder(), gameId: null, nonce: 0, waitMs: 0, uploads: [], uploadMs: 0, lastAck: -1, hasSentLog: false,
+  pace: newPace(), rec: newRecorder(), gameId: null, nonce: 0, waitMs: 0, uploads: [], sender: newSender(), hasSentLog: false,
   isPaused: false, fx: emptyFx(), overMs: 0, applied: [], outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
   hasPostedOver: false, result: null, isDirty: true, hasKeyed: false, pick: 0, typing: null, typeError: null,
 })
@@ -171,25 +169,21 @@ function queueUpload(live: Live, kind: 'marathon' | 'battle') {
   if (u) live.uploads.push(u)
 }
 
-// One chunk at a time: the next goes when the hooks' acknowledged position moves, or again after
-// UPLOAD_RESEND_MS if it did not. Done once the hooks hold the whole stream for its key.
+// One chunk at a time: the next goes when the hooks' acknowledged position moves, or again after a
+// pause if it did not. Done once the hooks hold the whole stream for its key, or dropped if they never move.
 function nextChunk(live: Live): LogMsg | null {
   const u = live.uploads[0]
   if (!u) return null
   const ack = live.props.uploaded
   const isAcked = ack !== null && ack.key === u.key
   const have = isAcked ? ack.have : 0
-  if (isAcked && have >= u.stream.length) {
+  const next = isAcked && have >= u.stream.length ? 'drop' : nextSend(live.sender, have)
+  if (next === 'drop') {
     live.uploads.shift()
-    live.lastAck = -1
-    live.uploadMs = 0
+    live.sender = newSender()
     return nextChunk(live)
   }
-  live.uploadMs += STEP_MS
-  if (have === live.lastAck && live.uploadMs < UPLOAD_RESEND_MS) return null
-  live.lastAck = have
-  live.uploadMs = 0
-  return chunkAt(u, have)
+  return next === 'send' ? chunkAt(u, have) : null
 }
 
 function leave(live: Live) {
@@ -379,7 +373,9 @@ function tick(live: Live) {
       let moved = inputs.length > 0
       // A full recorder freezes the board: nothing past it could be verified.
       for (let i = 0; i < n && !g.isOver && !live.rec.isFull; i++) {
+        const counted = live.rec.steps
         recordStep(live.rec, inputs)
+        if (live.rec.steps === counted) break
         const r = step(g, inputs, STEP_MS)
         applyEvents(live, g, r.events)
         if (r.events.length > 0) moved = true
