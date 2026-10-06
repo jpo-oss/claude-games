@@ -49,7 +49,7 @@ plugins/
     hooks/engine.ts        pure game rules, seeded, no I/O
     hooks/draw.ts          board and UI drawing helpers
     hooks/net.ts           request building and response parsing
-    hooks/protocol.ts      copy of the server's protocol types
+    hooks/log.ts           input log format, mirrors the server's protocol.ts
     types/index.d.ts
     tests/
 docs/
@@ -83,13 +83,13 @@ What changes:
 - **Sign-in.** GitHub device flow, run entirely through `$.http.fetch`. The pane shows the code and `github.com/login/device`; the hooks module polls for the token. The OAuth app requests no scopes, so the token can only read the public profile. Device flow needs only the client ID, no secret ([GitHub docs](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)).
 - **One OAuth app per server.** The game asks the chosen server for its client ID (`GET /v1/config`) and signs in against that app. If every server shared one app, a rogue server could replay a player's token at another server and sign in as them. With one app each, a server only accepts tokens issued to its own app (see Sign-in below). The official server uses the jpo-oss app; self-hosters register their own.
 - **Server choice.** Picking Battle asks where to play: the configured server (the official one unless the player changed the setting), an address the player types, or the last address they typed. The leaderboard shows the server last played on and names it. Any server but the official one is labeled a community server, with a warning before first sign-in that it will learn the player's GitHub username. `userConfig.serverUrl` sets the default, Each server has its own leaderboard. Only `https://` is accepted, plus `http://localhost` for development.
-- **Distrust the server.** Everything a server sends is validated before use: attacks are whole numbers from 1 to 40, at most 60 pending; logins match GitHub's format (`^[A-Za-z0-9-]{1,39}$`); board snapshots are at most 400 characters from the piece alphabet; error text has control characters stripped and is capped at 120 characters and shown as the server's words, never as instructions. A request that takes longer than 30 s is abandoned. Room IDs are URL-encoded. A result the game doesn't recognise counts as no result, never as a win.
+- **Distrust the server.** Everything a server sends is validated before use: attacks are whole numbers from 1 to 40; logins match GitHub's format (`^[A-Za-z0-9-]{1,39}$`); board snapshots are at most 400 characters from the piece alphabet; error text has control characters stripped and is capped at 120 characters and shown as the server's words, never as instructions. A request that takes longer than 30 s is abandoned. Room IDs are URL-encoded. A result the game doesn't recognise counts as no result, never as a win.
 - **Sign out.** `/cg-block-battle signout` deletes the stored session and asks the server to revoke it.
 - **Offline.** Marathon works without a server. Battle and leaderboard show that the server is unreachable.
 - **Version check.** Every request sends the protocol version. The server answers 426 if it's too old, and the game tells the player to run `/plugin update`.
 - **Removed.** The justpressone org check, the tetris.jpoapps.com server, the `gh` CLI dependency, and the nexus/jpo naming. The new default is `games.jpoapps.com`. JustPressOne must keep that domain registered: whoever owns it receives every default player's sign-in.
 
-Battle sync uses held requests. The game sends its state and the server answers as soon as there's news for it (incoming garbage, the opponent's board changed, a result) or after 2 s of quiet. The game sends the next request straight away. That gives close to live-connection latency with far fewer requests than polling every 200 ms. Whether a held request survives inside a mod is unverified; the first server milestone tests it, and the 200 ms polling the game does today is the fallback.
+Battle sync uses held requests. The game sends its state and the server answers as soon as there's news for it (incoming garbage, the opponent's board changed, a result) or after 2 s of quiet. The game sends the next request straight away. That gives close to live-connection latency with far fewer requests than polling every 200 ms.
 
 ## claude-games-server repo
 
@@ -117,7 +117,7 @@ All under `/v1`, JSON, `Authorization: Bearer <session>` except sign-in.
 
 ### Sign-in
 
-`POST /v1/session` first checks the token with `POST https://api.github.com/applications/{client_id}/token`, authenticated with this server's client ID and secret. GitHub answers 404 for a token issued to any other app, so a token captured by another server is useless here. Then it reads the login with `GET /user`, stores the login and avatar, and returns a session key.
+`POST /v1/session` first checks the token with `POST https://api.github.com/applications/{client_id}/token`, authenticated with this server's client ID and secret. GitHub answers 404 for a token issued to any other app, so a token captured by another server is useless here. Then it reads the login with `GET /user`, stores the login and the GitHub account's age, and returns a session key.
 
 - Session keys are 32 random bytes, stored hashed, expire after 30 days without use, and can be revoked.
 - The server never stores or logs the GitHub token, and never logs request bodies on `/v1/session`.
@@ -131,9 +131,9 @@ The server picks the shared piece seed, relays attacks between players, caps att
 
 The engine is deterministic: the same seed and the same inputs at the same times always give the same game. The server uses that to check every result before it counts.
 
-- **Marathon.** The game asks `POST /v1/marathon` for a game ID and seed, so a player can't hunt for a lucky seed. It records every input with its game time (time played, so pauses don't count). At game over it sends the log to `POST /v1/scores`. The server replays the log with the engine and records the score the replay produces, not the score the client claims. A log longer than the time since the game started, or over a size cap, is rejected.
-- **Battle.** Each client records its inputs and the moment it applied each garbage batch, by the server's batch ID. At the end both send their logs. The server replays both boards with the shared seed and the garbage it actually sent. A win counts only if the loser's replay tops out, and the attacks each player sent match what their replay produces.
-- **Win farming.** Matches under 60 s don't count. Wins against the same opponent count once per day. GitHub accounts younger than 30 days can play but don't appear on the leaderboard.
+- **Marathon.** The game asks `POST /v1/marathon` for a game ID and seed, so a player can't hunt for a lucky seed. One step is 16 ms. The game records every input as a step delta and a code (the compact delta form), and sends the log in chunks while it plays. At game over it submits the log to `POST /v1/scores`. The server replays the log with the engine and records the score the replay produces, not the score the client claims. A game is at most 2 hours (450,000 steps), a log body is capped at 1.5 MB, and a log longer than the time since the game started is rejected. If the server can't start a game (signed out, refused because the player already has 5 open games in 2 hours, or no answer within 3 s), the game plays unranked. Quitting a ranked game submits it as played so far.
+- **Battle.** Each client records its inputs and the step at which it applied each garbage batch, by the server's batch ID. After the result both players send their logs, and the winner's log decides. A win counts when the winner's log replays cleanly and matches what the server sent, and the loser either topped out or forfeited. The loser's log is checked only when it was sent after a top-out. Garbage must be applied within 2 s of delivery, and the log length must match the match length within 5 s, each timed from that player's own matched reply. The attacks the winner's replay produces must cover what the server relayed.
+- **Win farming.** Matches under 60 s don't count. Repeat wins over the same opponent on one UTC day don't count. GitHub accounts younger than 30 days can play but don't appear on the leaderboard.
 - **Engine sharing.** The server needs the exact engine the game runs. The games repo owns `engine.ts`; the server repo keeps a copy and its CI fails if the copy differs from the game's released version. A game release that changes the rules needs a protocol version bump, so old clients get 426 instead of failed replays.
 
 This stops fabricated scores and fake wins. It doesn't stop a bot that plays well; nothing short of watching the player does.
@@ -150,7 +150,7 @@ This stops fabricated scores and fake wins. It doesn't stop a bot that plays wel
 
 ### Protocol sharing
 
-The server repo owns `protocol.ts`. The games repo keeps a copy in each game. CI in the games repo fetches the server's file at the pinned version and fails if they differ.
+The server repo owns `protocol.ts`. The game mirrors only the log format and the input order in `hooks/log.ts`, and a test pins the order. The server's CI checks its copy of the engine.
 
 ## Hosting
 
