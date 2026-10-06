@@ -1037,3 +1037,18 @@ test('battle: the top-out is posted again until the result comes', async ($: Eng
   for (let i = 0; i < 5; i++) await ui.advance(200)
   expect(overs()).toBe(settled)
 })
+
+test('a log goes to the server that started the game, with that server\'s session', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, req => (req.url === '/v1/marathon' ? { status: 200, body: { gameId: 'g1', seed: 77 } } : req.url === '/v1/battle/queue' ? MATCH : { status: 200, body: EMPTY_LEADERBOARD }), BOTH)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'marathon', nonce: 1 })
+  await ui.advance(48)
+  await ui.post({ type: 'menu', choice: 'battle', server: ACME })
+  await ui.advance(48)
+  await ui.post(chunk('g1', 'marathon', [3, 5]))
+  await ui.advance(48)
+  const scores = seen.filter(r => r.url.endsWith('/v1/scores'))
+  expect(scores).toHaveLength(1)
+  expect(scores[0]).toMatchObject({ url: 'https://games.jpoapps.com/v1/scores', auth: 'Bearer sess_1' })
+})

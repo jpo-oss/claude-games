@@ -60,6 +60,8 @@ const signInLine = (uri: string, code: string) => {
 }
 const trimSlash = (u: string) => u.replace(/\/+$/, '')
 
+type Owned = { key: string; base: string }
+
 const rt: {
   base: string
   home: string
@@ -82,9 +84,10 @@ const rt: {
   nudge: Timer | null
   isTurnOn: boolean
   wasNudged: boolean
-  // Logs are only taken for marathon game ids the server handed out and rooms we were matched in.
-  games: string[]
-  rooms: string[]
+  // Logs are only taken for marathon game ids the server handed out and rooms we were matched in,
+  // and go to the server that handed them out.
+  games: Owned[]
+  rooms: Owned[]
   asm: Assembly | null
   sentKeys: string[]
   wantsSync: boolean
@@ -243,15 +246,21 @@ async function startSignIn($: EngineInterface) {
   }
 }
 
-async function api($: EngineInterface, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<Reply<unknown>> {
-  if (!serverUrlOk(rt.base)) return { ok: false, status: -2, error: BAD_URL }
-  const s = await loadSession($)
+// A server other than the active one is only called with its own stored session, never with a sign-in.
+async function api($: EngineInterface, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, base = rt.base): Promise<Reply<unknown>> {
+  if (!serverUrlOk(base)) return { ok: false, status: -2, error: BAD_URL }
+  const isActive = base === rt.base
+  const s = isActive ? await loadSession($) : parseSession(await $.store.get(sessionKey(base)))
   if (s === null) {
+    if (!isActive) return { ok: false, status: -1, error: SIGNED_OUT }
     void startSignIn($)
     return { ok: false, status: -1, error: rt.signInLine ?? SIGNING_IN }
   }
-  const reply = await call((url, init) => $.http.fetch(url, init), rt.base, method, path, s.session, body, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
-  if (!reply.ok && reply.status === 401) await dropSession($)
+  const reply = await call((url, init) => $.http.fetch(url, init), base, method, path, s.session, body, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
+  if (!reply.ok && reply.status === 401) {
+    if (base === rt.base) await dropSession($)
+    else await $.store.delete(sessionKey(base))
+  }
 
   return reply
 }
@@ -321,7 +330,7 @@ async function pollQueue($: EngineInterface, startedAt: number) {
     if (q?.status === 'matched' && rt.queueTimer !== null) {
       stopQueue()
       rt.opponentLogin = q.opponent
-      rt.rooms = [...rt.rooms, q.roomId].slice(-8)
+      rt.rooms = [...rt.rooms, { key: q.roomId, base: rt.base }].slice(-8)
       rt.lastSyncOk = await $.clock.now()
       // Room for the big board and the opponent's beside it; a width the person dragged still wins.
       $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
@@ -408,41 +417,42 @@ async function startMarathon($: EngineInterface, nonce: number) {
   await resetBattle($, true)
   let gameId: string | null = null
   let seed = 0
-  if (serverUrlOk(rt.base) && (await loadSession($)) !== null) {
-    const r = await api($, 'POST', '/v1/marathon')
+  const base = rt.base
+  if (serverUrlOk(base) && (await loadSession($)) !== null) {
+    const r = await api($, 'POST', '/v1/marathon', undefined, base)
     const g = r.ok ? parseMarathonStart(r.data) : null
     if (g) {
       ;({ gameId, seed } = g)
-      rt.games = [...rt.games, g.gameId].slice(-8)
+      rt.games = [...rt.games, { key: g.gameId, base }].slice(-8)
     }
   }
   await setView($, { marathon: { nonce, gameId, seed } })
 }
 
 // Retries only when the server could not answer (status 0) or said 503.
-async function sendLog($: EngineInterface, path: string, body: unknown, tries: number, waitMs: number): Promise<Reply<unknown>> {
+async function sendLog($: EngineInterface, base: string, path: string, body: unknown, tries: number, waitMs: number): Promise<Reply<unknown>> {
   for (let i = 1; ; i++) {
-    const r = await api($, 'POST', path, body)
+    const r = await api($, 'POST', path, body, base)
     if (r.ok || (r.status !== 0 && r.status !== 503) || i >= tries) return r
     await $.clock.sleep(waitMs)
   }
 }
 
 async function takeLog($: EngineInterface, m: LogMsg) {
-  const allowed = m.kind === 'marathon' ? rt.games.includes(m.key) : rt.rooms.includes(m.key)
-  if (!allowed) return
+  const owner = (m.kind === 'marathon' ? rt.games : rt.rooms).find(o => o.key === m.key)
+  if (!owner) return
   const r = takeChunk(rt.asm, m)
   rt.asm = r.asm
   await setView($, { uploaded: { key: m.key, have: r.have } })
   if (!r.log || rt.sentKeys.includes(m.key)) return
   rt.sentKeys = [...rt.sentKeys, m.key].slice(-8)
   if (m.kind === 'marathon') {
-    const res = await sendLog($, '/v1/scores', { gameId: m.key, log: r.log }, 3, 5_000)
+    const res = await sendLog($, owner.base, '/v1/scores', { gameId: m.key, log: r.log }, 3, 5_000)
     const board = res.ok ? parseLeaderboard(res.data) : null
-    if (board) await setView($, { leaderboard: board })
+    if (board && owner.base === rt.base) await setView($, { leaderboard: board })
   } else {
     // The server waits 30 s for the winner's log.
-    await sendLog($, `/v1/battle/${encodeURIComponent(m.key)}/log`, { log: r.log }, 5, 3_000)
+    await sendLog($, owner.base, `/v1/battle/${encodeURIComponent(m.key)}/log`, { log: r.log }, 5, 3_000)
   }
 }
 
