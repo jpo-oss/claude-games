@@ -1297,3 +1297,108 @@ test('a search restarted while its first poll looks up the session still finds i
   expect(seen.filter(r => r.method === 'POST' && r.url.endsWith('/v1/battle/queue'))).toHaveLength(1)
   expect(await shown(ui)).toContain('bob')
 })
+
+// The first queue POST answers with a match and, if asked, it and the first DELETE wait for the test.
+function heldQueue(on: On, hold: { post: boolean; del: boolean }) {
+  store(on, SIGNED_IN)
+  const seen: Seen[] = []
+  const gates = { post: () => {}, del: () => {} }
+  let posts = 0
+  let dels = 0
+  on('http.fetch', async (_$, e) => {
+    const method = e.init?.method ?? 'GET'
+    seen.push({ method, url: e.url, auth: e.init?.headers?.Authorization ?? '', body: undefined })
+    const path = new URL(e.url).pathname
+    if (path === '/v1/battle/queue' && method === 'POST' && ++posts === 1) {
+      if (hold.post) await new Promise<void>(r => (gates.post = r))
+      return { value: reply({ status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } }) }
+    }
+    if (path === '/v1/battle/queue' && method === 'DELETE') {
+      if (hold.del && ++dels === 1) await new Promise<void>(r => (gates.del = r))
+      return { value: reply({}) }
+    }
+    return { value: reply(path === '/v1/battle/queue' ? MATCH.body : { opponent: OPPONENT, incoming: [] }) }
+  })
+
+  return { seen, release: gates }
+}
+
+async function leaveAndSearchAgain(ui: Ui) {
+  await ui.key({ key: 'q' })
+  await ui.advance(48)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+}
+
+const queuePosts = (seen: Seen[]) => seen.filter(r => r.method === 'POST' && r.url.endsWith('/v1/battle/queue')).length
+
+test('a slow DELETE from leaving does not stop the search started after it', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const q = heldQueue(on, { post: true, del: true })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  await leaveAndSearchAgain(ui)
+  q.release.post()
+  await ui.advance(48)
+  q.release.del()
+  await ui.advance(48)
+  const before = queuePosts(q.seen)
+  for (let i = 0; i < 3; i++) {
+    await clock.advance(1_500)
+    await ui.advance(48)
+  }
+  expect(queuePosts(q.seen)).toBeGreaterThanOrEqual(before + 3)
+  expect(await shown(ui)).toContain('Looking for an opponent')
+  expect(await shown(ui)).not.toContain('bob')
+})
+
+test('a match from a search the player left is cancelled, not adopted by the next search', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const q = heldQueue(on, { post: true, del: false })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  await leaveAndSearchAgain(ui)
+  const deletes = () => q.seen.filter(r => r.method === 'DELETE' && r.url === OFFICIAL_URL + '/v1/battle/queue')
+  expect(deletes()).toHaveLength(1)
+  q.release.post()
+  await ui.advance(48)
+  await ui.advance(48)
+  expect(deletes()).toHaveLength(2)
+  expect(deletes()[1]!.auth).toBe('Bearer sess_1')
+  const before = queuePosts(q.seen)
+  for (let i = 0; i < 3; i++) {
+    await clock.advance(1_500)
+    await ui.advance(48)
+  }
+  for (let i = 0; i < 4; i++) await ui.advance(200)
+  expect(queuePosts(q.seen)).toBeGreaterThanOrEqual(before + 3)
+  expect(q.seen.some(r => r.url.includes('/r1/'))).toBe(false)
+  expect(await shown(ui)).not.toContain('bob')
+})
+
+test('a win counts for the login the match was made with, whatever the shown name became', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on, SIGNED_IN)
+  let releaseSync = () => {}
+  let isHeld = false
+  on('http.fetch', async (_$, e) => {
+    const path = new URL(e.url).pathname
+    if (path === '/v1/battle/queue') return { value: reply({ status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } }) }
+    if (path === '/v1/session') return { value: reply({}) }
+    if (!isHeld) {
+      isHeld = true
+      await new Promise<void>(r => (releaseSync = r))
+    }
+    return { value: reply({ opponent: OPPONENT, incoming: [], result: { winner: 'alice' } }) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  for (let i = 0; i < 3; i++) await ui.advance(200)
+  expect(isHeld).toBe(true)
+  await $.command.run(run('signout'))
+  releaseSync()
+  for (let i = 0; i < 6; i++) await ui.advance(200)
+  expect(await shown(ui)).toContain('YOU WIN')
+})

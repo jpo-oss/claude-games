@@ -74,13 +74,17 @@ const rt: {
   signInGen: number
   signInLine: string | null
   queueTimer: Timer | null
-  // Bumped whenever a search starts or stops, so a poll that resumes into a different one drops its reply.
-  queueGen: number
-  isPolling: boolean
+  // Bumped on every battle start, stop, reset, server switch and match. An async flow keeps the value it
+  // started with and writes nothing once it has moved on.
+  battleGen: number
+  // The generation whose queue poll is in flight, so a stale one never holds up the next search.
+  polling: number | null
   isSyncing: boolean
   outbox: Outbox
   latest: { snapshot: string; isOver: boolean }
   opponentLogin: string
+  // The login whose session made the current match; the result is judged against it.
+  myLogin: string
   lastSyncOk: number
   isAsking: boolean
   nudge: Timer | null
@@ -104,12 +108,13 @@ const rt: {
   signInGen: 0,
   signInLine: null,
   queueTimer: null,
-  queueGen: 0,
-  isPolling: false,
+  battleGen: 0,
+  polling: null,
   isSyncing: false,
   outbox: emptyOutbox(),
   latest: { snapshot: '', isOver: false },
   opponentLogin: '',
+  myLogin: '',
   lastSyncOk: 0,
   isAsking: false,
   nudge: null,
@@ -142,7 +147,8 @@ async function loadSession($: EngineInterface, base = rt.base): Promise<Session 
   if (loaded === null || base !== rt.base) return loaded
   const s = rt.session?.base === base ? rt.session.s : loaded
   rt.session = { base, s }
-  if ((await read($, view)).me !== s.login) await setView($, { me: s.login })
+  const { me } = await read($, view)
+  if (me !== s.login && base === rt.base && rt.session?.s === s) await setView($, { me: s.login })
 
   return s
 }
@@ -155,17 +161,22 @@ function stopSignIn() {
   rt.signInGen++
 }
 
-async function useServer($: EngineInterface, url: string) {
+// Returns the battle generation to carry on with, or null once something newer has taken over.
+async function useServer($: EngineInterface, url: string, gen: number): Promise<number | null> {
   const next = trimSlash(url)
   if (next !== rt.home) {
     await $.store.set(LAST_SERVER, next)
     await update($, view, v => ({ ...v, servers: { ...v.servers, last: next } }))
   }
-  if (next === rt.base) return
+  if (!isLive(gen)) return null
+  if (next === rt.base) return gen
   stopSignIn()
   rt.base = next
   rt.session = null
+  const switched = bump()
   await update($, view, v => ({ ...v, me: null, leaderboard: null, servers: { ...v.servers, active: next } }))
+
+  return isLive(switched) ? switched : null
 }
 
 async function loadLast($: EngineInterface) {
@@ -259,6 +270,28 @@ async function startSignIn($: EngineInterface) {
 
 // A server other than the active one is only called with its own stored session, never with a sign-in.
 // isWanted is asked once the session is in hand, right before anything is sent.
+async function send(
+  $: EngineInterface,
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  body?: unknown,
+  base = rt.base,
+  isWanted = () => true,
+): Promise<{ r: Reply<unknown>; login: string | null }> {
+  if (!serverUrlOk(base)) return { r: { ok: false, status: -2, error: BAD_URL }, login: null }
+  const s = await loadSession($, base)
+  if (!isWanted()) return { r: { ok: false, status: -3, error: '' }, login: null }
+  if (s === null) {
+    if (base !== rt.base) return { r: { ok: false, status: -1, error: SIGNED_OUT }, login: null }
+    void startSignIn($)
+    return { r: { ok: false, status: -1, error: rt.signInLine ?? SIGNING_IN }, login: null }
+  }
+  const r = await call((url, init) => $.http.fetch(url, init), base, method, path, s.session, body, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
+  if (!r.ok && r.status === 401) await dropSession($, base)
+
+  return { r, login: s.login }
+}
+
 async function api(
   $: EngineInterface,
   method: 'GET' | 'POST' | 'DELETE',
@@ -267,22 +300,11 @@ async function api(
   base = rt.base,
   isWanted = () => true,
 ): Promise<Reply<unknown>> {
-  if (!serverUrlOk(base)) return { ok: false, status: -2, error: BAD_URL }
-  const s = await loadSession($, base)
-  if (!isWanted()) return { ok: false, status: -3, error: '' }
-  if (s === null) {
-    if (base !== rt.base) return { ok: false, status: -1, error: SIGNED_OUT }
-    void startSignIn($)
-    return { ok: false, status: -1, error: rt.signInLine ?? SIGNING_IN }
-  }
-  const reply = await call((url, init) => $.http.fetch(url, init), base, method, path, s.session, body, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
-  if (!reply.ok && reply.status === 401) await dropSession($, base)
-
-  return reply
+  return (await send($, method, path, body, base, isWanted)).r
 }
 
-function resultFor(winner: string, me: string | null): 'win' | 'loss' | null {
-  if (me !== null && winner === me) return 'win'
+function resultFor(winner: string): 'win' | 'loss' | null {
+  if (rt.myLogin !== '' && winner === rt.myLogin) return 'win'
   if (winner === rt.opponentLogin) return 'loss'
 
   return null
@@ -307,134 +329,155 @@ async function prefetchBest($: EngineInterface) {
   if (board && base === rt.base) await setView($, { leaderboard: board })
 }
 
-function stopQueue() {
+const isLive = (gen: number) => gen === rt.battleGen
+
+// A new generation: whatever timers the old one left are stopped with it.
+function bump(): number {
   rt.queueTimer?.cancel()
   rt.queueTimer = null
-  rt.queueGen++
-}
-
-async function resetBattle($: EngineInterface, isLeaving: boolean) {
-  const wasQueueing = rt.queueTimer !== null
-  stopQueue()
   rt.retry?.cancel()
   rt.retry = null
+
+  return ++rt.battleGen
+}
+
+// Returns the generation it set up, or null once something newer has taken over.
+async function resetBattle($: EngineInterface, isLeaving: boolean): Promise<number | null> {
+  const wasQueueing = rt.queueTimer !== null
+  const base = rt.base
+  const gen = bump()
   rt.outbox = emptyOutbox()
   rt.latest = { snapshot: '', isOver: false }
   rt.opponentLogin = ''
-  if (isLeaving && wasQueueing) await api($, 'DELETE', '/v1/battle/queue')
+  rt.myLogin = ''
+  if (isLeaving && wasQueueing) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
+  if (!isLive(gen)) return null
   await setBattle($, idleBattle())
+
+  return isLive(gen) ? gen : null
 }
 
-async function pollQueue($: EngineInterface, startedAt: number) {
-  if (rt.isPolling || rt.queueTimer === null) return
-  rt.isPolling = true
-  const gen = rt.queueGen
+async function pollQueue($: EngineInterface, startedAt: number, gen: number) {
+  if (rt.polling === gen || !isLive(gen)) return
+  rt.polling = gen
   const base = rt.base
-  const current = () => gen === rt.queueGen && rt.queueTimer !== null && base === rt.base
+  const live = () => isLive(gen)
+  const cancel = () => void api($, 'DELETE', '/v1/battle/queue', undefined, base).catch(() => undefined)
   try {
     const now = await $.clock.now()
-    if (!current()) return
+    if (!live()) return
     if (now - startedAt > QUEUE_GIVE_UP_MS) {
-      await resetBattle($, true)
-      await setView($, { notice: 'No opponent found. Try again in a moment.' })
+      if ((await resetBattle($, true)) !== null) await setView($, { notice: 'No opponent found. Try again in a moment.' })
 
       return
     }
-    const r = await api($, 'POST', '/v1/battle/queue', undefined, base, current)
-    // A reply from a search that has since been replaced on this server still counts; one the player has left is cancelled there.
-    const isSearching = () => base === rt.base && rt.queueTimer !== null
-    const cancel = () => api($, 'DELETE', '/v1/battle/queue', undefined, base)
+    const { r, login } = await send($, 'POST', '/v1/battle/queue', undefined, base, live)
+    const q = r.ok ? parseQueue(r.data) : null
+    // A match made for a search the player has left is cancelled on its server; the current search carries on.
+    if (!live()) {
+      if (q?.status === 'matched') cancel()
+
+      return
+    }
     if (!r.ok) {
       // The server says 409 while it still holds the last match; that clears on its own.
-      if (r.status === -3 || r.status === 409 || !current()) return
-      stopQueue()
-      if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue')
+      if (r.status === 409) return
+      const stopped = bump()
+      if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
+      if (!isLive(stopped)) return
       await setBattle($, idleBattle())
-      await setView($, { notice: fail(r) })
+      if (isLive(stopped)) await setView($, { notice: fail(r) })
 
       return
     }
-    const q = parseQueue(r.data)
-    if (!isSearching()) {
-      await cancel()
-
-      return
-    }
-    if (q?.status === 'matched') {
-      const now = await $.clock.now()
-      if (!isSearching()) {
-        await cancel()
-
-        return
-      }
-      stopQueue()
-      rt.opponentLogin = q.opponent
-      rt.rooms = [...rt.rooms, { key: q.roomId, base }].slice(-8)
-      rt.lastSyncOk = now
-      // Room for the big board and the opponent's beside it; a width the person dragged still wins.
-      $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
-      await setBattle($, {
-        status: 'matched',
-        roomId: q.roomId,
-        seed: q.seed,
-        opponent: { login: q.opponent, snapshot: '', isOver: false },
-        incoming: [],
-        result: null,
-      })
-    }
+    if (q?.status !== 'matched' || login === null) return
+    const matchedAt = await $.clock.now()
+    if (!live()) return cancel()
+    bump()
+    rt.opponentLogin = q.opponent
+    rt.myLogin = login
+    rt.rooms = [...rt.rooms, { key: q.roomId, base }].slice(-8)
+    rt.lastSyncOk = matchedAt
+    // Room for the big board and the opponent's beside it; a width the person dragged still wins.
+    $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
+    await setBattle($, {
+      status: 'matched',
+      roomId: q.roomId,
+      seed: q.seed,
+      opponent: { login: q.opponent, snapshot: '', isOver: false },
+      incoming: [],
+      result: null,
+    })
   } finally {
-    rt.isPolling = false
+    if (rt.polling === gen) rt.polling = null
   }
 }
 
 async function startQueue($: EngineInterface) {
-  await resetBattle($, true)
+  const gen = bump()
   await setView($, { notice: null })
+  if (!isLive(gen)) return
   await setBattle($, { status: 'queueing' })
+  if (!isLive(gen)) return
   const startedAt = await $.clock.now()
-  rt.queueTimer = $.clock.every(QUEUE_POLL_MS, () => void pollQueue($, startedAt))
-  void pollQueue($, startedAt)
+  if (!isLive(gen)) return
+  rt.queueTimer = $.clock.every(QUEUE_POLL_MS, () => void pollQueue($, startedAt, gen))
+  void pollQueue($, startedAt, gen)
 }
 
 async function flushSync($: EngineInterface) {
   if (rt.isSyncing) return
+  const gen = rt.battleGen
+  const base = rt.base
+  const live = () => isLive(gen)
   const { battle } = await read($, view)
-  if (battle.roomId === null || battle.status !== 'matched') return
+  if (!live() || rt.isSyncing || battle.roomId === null || battle.status !== 'matched') return
   rt.isSyncing = true
   try {
     const again = (ms: number) => {
       rt.retry?.cancel()
       rt.retry = $.clock.after(ms, () => void flushSync($))
     }
+    const end = (notice: string) => endMatch($, gen, notice)
+    const timedOut = async () => {
+      const now = await $.clock.now()
+      return live() && now - rt.lastSyncOk >= TIMEOUT_MS
+    }
     // After topping out the Client stops posting syncs, so the hooks keep asking until the result comes or the server has been silent too long.
     const stalled = async () => {
       if (!rt.latest.isOver) return
-      if ((await $.clock.now()) - rt.lastSyncOk >= TIMEOUT_MS) await endMatch($, DOWN)
-      else again(1_000)
+      if (await timedOut()) await end(DOWN)
+      else if (live()) again(1_000)
     }
     const { seq, attacks } = nextPayload(rt.outbox)
-    const r = await api($, 'POST', `/v1/battle/${encodeURIComponent(battle.roomId)}/sync`, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver })
+    const path = `/v1/battle/${encodeURIComponent(battle.roomId)}/sync`
+    const r = await api($, 'POST', path, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver }, base)
+    if (!live()) return
     if (!r.ok) {
-      if (r.status === 404 || r.status === 403) await endMatch($, 'The match is no longer available.')
-      else if (r.status === 401) await endMatch($, fail(r))
-      else if (r.status === 0 && !rt.latest.isOver && (await $.clock.now()) - rt.lastSyncOk >= TIMEOUT_MS) await endMatch($, DOWN)
-      else await stalled()
+      if (r.status === 404 || r.status === 403) await end('The match is no longer available.')
+      else if (r.status === 401) await end(fail(r))
+      else if (r.status === 0 && !rt.latest.isOver) {
+        if (await timedOut()) await end(DOWN)
+      } else await stalled()
 
       return
     }
     rt.outbox.inflight = null
     const s = parseSync(r.data)
     if (!s) return stalled()
-    rt.lastSyncOk = await $.clock.now()
+    const now = await $.clock.now()
+    if (!live()) return
+    rt.lastSyncOk = now
     if (!s.ended && rt.latest.isOver) again(250)
-    if (s.ended && (s.winner === null || resultFor(s.winner, (await read($, view)).me) === null)) return endMatch($, 'The match ended with no result.')
+    const result = s.ended && s.winner !== null ? resultFor(s.winner) : null
+    if (s.ended && result === null) return end('The match ended with no result.')
     await update($, view, v => ({
       ...v,
       battle: {
         ...v.battle,
         opponent: s.opponent ?? v.battle.opponent,
         incoming: mergeIncoming(v.battle.incoming, s.incoming),
-        ...(s.ended ? { status: 'ended' as const, result: resultFor(s.winner!, v.me) } : {}),
+        ...(s.ended ? { status: 'ended' as const, result } : {}),
       },
     }))
   } finally {
@@ -446,19 +489,24 @@ async function flushSync($: EngineInterface) {
   }
 }
 
-async function endMatch($: EngineInterface, notice: string) {
-  await resetBattle($, false)
-  await setView($, { notice })
+async function endMatch($: EngineInterface, gen: number, notice: string) {
+  if (!isLive(gen)) return
+  if ((await resetBattle($, false)) !== null) await setView($, { notice })
 }
 
 async function startMarathon($: EngineInterface, nonce: number) {
+  const gen = await resetBattle($, true)
+  if (gen === null) return
   await setView($, { notice: null })
-  await resetBattle($, true)
+  if (!isLive(gen)) return
   let gameId: string | null = null
   let seed = 0
   const base = rt.base
-  if (serverUrlOk(base) && (await loadSession($, base)) !== null) {
+  const isSignedIn = serverUrlOk(base) && (await loadSession($, base)) !== null
+  if (!isLive(gen)) return
+  if (isSignedIn) {
     const r = await api($, 'POST', '/v1/marathon', undefined, base)
+    if (!isLive(gen)) return
     const g = r.ok ? parseMarathonStart(r.data) : null
     if (g) {
       ;({ gameId, seed } = g)
@@ -499,19 +547,21 @@ async function handle($: EngineInterface, m: ClientMsg) {
   if (m.type === 'menu') {
     if (m.choice === 'leaderboard') return loadLeaderboard($)
     if (m.choice === 'battle') {
-      await resetBattle($, true)
-      await useServer($, m.server)
+      const gen = await resetBattle($, true)
+      if (gen === null || (await useServer($, m.server, gen)) === null) return
 
       return startQueue($)
     }
     if (m.choice === 'marathon') return startMarathon($, m.nonce)
+    await resetBattle($, true)
 
-    return resetBattle($, true)
+    return
   }
   if (m.type === 'log') return takeLog($, m)
   if (m.type !== 'sync') return
+  const gen = rt.battleGen
   const { battle } = await read($, view)
-  if (battle.status !== 'matched') return
+  if (!isLive(gen) || battle.status !== 'matched') return
   rt.latest = { snapshot: m.snapshot, isOver: m.isOver }
   queueAttacks(rt.outbox, m.attacks)
   if (rt.isSyncing) {
