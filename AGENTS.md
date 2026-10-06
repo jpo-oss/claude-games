@@ -31,7 +31,8 @@ Things that bite:
 
 1. Create `plugins/<game>/` with `.claude-plugin/plugin.json`, `hooks/hooks.json` and the hooks module.
 2. Add it to `.claude-plugin/marketplace.json`. The `name` there must match `plugin.json`.
-3. Bump `version` in `plugin.json` on every release, or players won't get the update.
+3. Name its slash command `cg-<game>` (Block Battle is `/cg-block-battle`) so it can't clash with other plugins' commands.
+4. Bump `version` in `plugin.json` on every release, or players won't get the update.
 
 ## Rules
 

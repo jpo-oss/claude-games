@@ -202,7 +202,7 @@ test('long-turn nudge: one toast per turn, re-armed by the next turn', async ($:
   await clock.advance(119_000)
   expect(toasts).toEqual([])
   await clock.advance(2_000)
-  expect(toasts).toEqual(['Long task. /block-battle while you wait?'])
+  expect(toasts).toEqual(['Long task. /cg-block-battle while you wait?'])
   await $.prompt.submit({ text: 'queued mid turn', wait: false, origin: { kind: 'composer' } })
   await clock.advance(300_000)
   expect(toasts).toHaveLength(1)
@@ -249,7 +249,7 @@ test('long-turn nudge: waits while a question dialog is up', async ($: Engine, o
   await clock.advance(80_000)
   await asking
   await clock.advance(20_000)
-  expect(toasts).toEqual(['Long task. /block-battle while you wait?'])
+  expect(toasts).toEqual(['Long task. /cg-block-battle while you wait?'])
 })
 
 test('marathon game over posts the score once and shows the fill and the label', async ($: Engine, on: On) => {

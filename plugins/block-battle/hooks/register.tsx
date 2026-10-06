@@ -332,19 +332,19 @@ function tryNudge($: EngineInterface) {
     return
   }
   rt.wasNudged = true
-  $.ui.toast('Long task. /block-battle while you wait?', { timeoutMs: 8_000 })
+  $.ui.toast('Long task. /cg-block-battle while you wait?', { timeoutMs: 8_000 })
 }
 
 export const register: Register = (on, options) => {
   rt.base = typeof options.serverUrl === 'string' && options.serverUrl !== '' ? options.serverUrl : rt.base
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'block-battle', description: 'Play Block Battle while Claude works: Marathon, 1v1 battles, leaderboard' })
+    await $.command.register({ name: 'cg-block-battle', description: 'Play Block Battle while Claude works: Marathon, 1v1 battles, leaderboard' })
 
     return next(e)
   })
 
-  on('command.run', { command: 'block-battle' }, async $ => {
+  on('command.run', { command: 'cg-block-battle' }, async $ => {
     await resetBattle($, true)
     await setView($, { notice: null })
     const opened = await $.ui.open({ id: PANE, title: 'Block Battle', focus: true, closeOnEscape: true, holdToasts: true, columns: 66, rows: 46 })

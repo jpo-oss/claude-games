@@ -15,7 +15,8 @@ Block Battle is a port of an internal game we already run (jpo-tetris, built for
 | Distribution | Claude Code plugin marketplace on GitHub |
 | Repos | `jpo-oss/claude-games` (games + marketplace), `jpo-oss/claude-games-server` (server) |
 | License | MIT for both |
-| First game | Block Battle, plugin name `block-battle` |
+| First game | Block Battle, plugin name `block-battle`, command `/cg-block-battle` |
+| Commands | Every game's slash command starts with `cg-` |
 | Identity | GitHub device sign-in with no scopes |
 | Official server | One small Hetzner VPS |
 | Self-hosting | Supported. Players pick a server in plugin settings |
