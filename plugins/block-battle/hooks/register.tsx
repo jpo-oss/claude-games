@@ -129,8 +129,12 @@ const rt: {
 }
 
 const setView = ($: EngineInterface, patch: Partial<GameView>) => update($, view, v => ({ ...v, ...patch }))
-const setBattle = ($: EngineInterface, patch: Partial<Battle>) =>
-  update($, view, v => ({ ...v, battle: { ...v.battle, ...patch } }))
+const isLive = (gen: number) => gen === rt.battleGen
+// Battle writes recheck their generation inside the update: the SDK can hold a write after the caller's own check.
+const setViewIf = ($: EngineInterface, gen: number, patch: Partial<GameView>) =>
+  update($, view, v => (isLive(gen) ? { ...v, ...patch } : v))
+const setBattleIf = ($: EngineInterface, gen: number, patch: Partial<Battle>) =>
+  update($, view, v => (isLive(gen) ? { ...v, battle: { ...v.battle, ...patch } } : v))
 
 function noticeFor(r: { status: number; error: string }): string {
   if (r.status === 0) return DOWN
@@ -148,7 +152,7 @@ async function loadSession($: EngineInterface, base = rt.base): Promise<Session 
   const s = rt.session?.base === base ? rt.session.s : loaded
   rt.session = { base, s }
   const { me } = await read($, view)
-  if (me !== s.login && base === rt.base && rt.session?.s === s) await setView($, { me: s.login })
+  if (me !== s.login) await update($, view, v => (base === rt.base && rt.session?.s === s ? { ...v, me: s.login } : v))
 
   return s
 }
@@ -174,7 +178,7 @@ async function useServer($: EngineInterface, url: string, gen: number): Promise<
   rt.base = next
   rt.session = null
   const switched = bump()
-  await update($, view, v => ({ ...v, me: null, leaderboard: null, servers: { ...v.servers, active: next } }))
+  await update($, view, v => (isLive(switched) ? { ...v, me: null, leaderboard: null, servers: { ...v.servers, active: next } } : v))
 
   return isLive(switched) ? switched : null
 }
@@ -184,10 +188,14 @@ async function loadLast($: EngineInterface) {
   if (typeof last === 'string' && serverUrlOk(last)) await update($, view, v => ({ ...v, servers: { ...v.servers, last } }))
 }
 
-async function dropSession($: EngineInterface, base: string) {
-  if (rt.session?.base === base) rt.session = null
-  await $.store.delete(sessionKey(base))
-  if (base === rt.base) await setView($, { me: null })
+// Forgets only the session that was sent: a newer one saved meanwhile stays.
+async function dropSession($: EngineInterface, base: string, sent: string) {
+  if (rt.session?.base === base && rt.session.s.session === sent) rt.session = null
+  if (parseSession(await $.store.get(sessionKey(base)))?.session === sent) {
+    await $.store.delete(sessionKey(base))
+    if (rt.session?.base === base) await $.store.set(sessionKey(base), rt.session.s)
+  }
+  await update($, view, v => (base === rt.base && rt.session?.base !== base ? { ...v, me: null } : v))
 }
 
 async function signOut($: EngineInterface): Promise<string> {
@@ -199,7 +207,7 @@ async function signOut($: EngineInterface): Promise<string> {
       $.clock.sleep(TIMEOUT_MS, { signal }),
     )
   }
-  await dropSession($, base)
+  await dropSession($, base, s.session)
 
   return 'Signed out of Block Battle.'
 }
@@ -255,7 +263,7 @@ async function startSignIn($: EngineInterface) {
         rt.session = { base, s }
         await $.store.set(sessionKey(base), s)
         if (!live() || base !== rt.base) return
-        await setView($, { me: s.login })
+        await update($, view, v => (live() && base === rt.base && rt.session?.s === s ? { ...v, me: s.login } : v))
         await end(`Signed in as ${s.login}.`)
         void prefetchBest($)
       } catch {
@@ -287,7 +295,7 @@ async function send(
     return { r: { ok: false, status: -1, error: rt.signInLine ?? SIGNING_IN }, login: null }
   }
   const r = await call((url, init) => $.http.fetch(url, init), base, method, path, s.session, body, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
-  if (!r.ok && r.status === 401) await dropSession($, base)
+  if (!r.ok && r.status === 401) await dropSession($, base, s.session)
 
   return { r, login: s.login }
 }
@@ -329,8 +337,6 @@ async function prefetchBest($: EngineInterface) {
   if (board && base === rt.base) await setView($, { leaderboard: board })
 }
 
-const isLive = (gen: number) => gen === rt.battleGen
-
 // A new generation: whatever timers the old one left are stopped with it.
 function bump(): number {
   rt.queueTimer?.cancel()
@@ -352,7 +358,7 @@ async function resetBattle($: EngineInterface, isLeaving: boolean): Promise<numb
   rt.myLogin = ''
   if (isLeaving && wasQueueing) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
   if (!isLive(gen)) return null
-  await setBattle($, idleBattle())
+  await setBattleIf($, gen, idleBattle())
 
   return isLive(gen) ? gen : null
 }
@@ -362,45 +368,40 @@ async function pollQueue($: EngineInterface, startedAt: number, gen: number) {
   rt.polling = gen
   const base = rt.base
   const live = () => isLive(gen)
-  const cancel = () => void api($, 'DELETE', '/v1/battle/queue', undefined, base).catch(() => undefined)
   try {
     const now = await $.clock.now()
     if (!live()) return
     if (now - startedAt > QUEUE_GIVE_UP_MS) {
-      if ((await resetBattle($, true)) !== null) await setView($, { notice: 'No opponent found. Try again in a moment.' })
+      const reset = await resetBattle($, true)
+      if (reset !== null) await setViewIf($, reset, { notice: 'No opponent found. Try again in a moment.' })
 
       return
     }
     const { r, login } = await send($, 'POST', '/v1/battle/queue', undefined, base, live)
-    const q = r.ok ? parseQueue(r.data) : null
-    // A match made for a search the player has left is cancelled on its server; the current search carries on.
-    if (!live()) {
-      if (q?.status === 'matched') cancel()
-
-      return
-    }
+    // A match made for a search the player has left is ignored: the server ends it by forfeit once nobody syncs,
+    // and until then answers this search with 409, which is retried.
+    if (!live()) return
     if (!r.ok) {
-      // The server says 409 while it still holds the last match; that clears on its own.
       if (r.status === 409) return
       const stopped = bump()
       if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
-      if (!isLive(stopped)) return
-      await setBattle($, idleBattle())
-      if (isLive(stopped)) await setView($, { notice: fail(r) })
+      await setBattleIf($, stopped, idleBattle())
+      await setViewIf($, stopped, { notice: fail(r) })
 
       return
     }
+    const q = parseQueue(r.data)
     if (q?.status !== 'matched' || login === null) return
     const matchedAt = await $.clock.now()
-    if (!live()) return cancel()
-    bump()
+    if (!live()) return
+    const matched = bump()
     rt.opponentLogin = q.opponent
     rt.myLogin = login
     rt.rooms = [...rt.rooms, { key: q.roomId, base }].slice(-8)
     rt.lastSyncOk = matchedAt
     // Room for the big board and the opponent's beside it; a width the person dragged still wins.
     $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
-    await setBattle($, {
+    await setBattleIf($, matched, {
       status: 'matched',
       roomId: q.roomId,
       seed: q.seed,
@@ -415,9 +416,9 @@ async function pollQueue($: EngineInterface, startedAt: number, gen: number) {
 
 async function startQueue($: EngineInterface) {
   const gen = bump()
-  await setView($, { notice: null })
+  await setViewIf($, gen, { notice: null })
   if (!isLive(gen)) return
-  await setBattle($, { status: 'queueing' })
+  await setBattleIf($, gen, { status: 'queueing' })
   if (!isLive(gen)) return
   const startedAt = await $.clock.now()
   if (!isLive(gen)) return
@@ -431,7 +432,8 @@ async function flushSync($: EngineInterface) {
   const base = rt.base
   const live = () => isLive(gen)
   const { battle } = await read($, view)
-  if (!live() || rt.isSyncing || battle.roomId === null || battle.status !== 'matched') return
+  const room = battle.roomId
+  if (!live() || rt.isSyncing || room === null || battle.status !== 'matched') return
   rt.isSyncing = true
   try {
     const again = (ms: number) => {
@@ -450,7 +452,7 @@ async function flushSync($: EngineInterface) {
       else if (live()) again(1_000)
     }
     const { seq, attacks } = nextPayload(rt.outbox)
-    const path = `/v1/battle/${encodeURIComponent(battle.roomId)}/sync`
+    const path = `/v1/battle/${encodeURIComponent(room)}/sync`
     const r = await api($, 'POST', path, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver }, base)
     if (!live()) return
     if (!r.ok) {
@@ -471,15 +473,19 @@ async function flushSync($: EngineInterface) {
     if (!s.ended && rt.latest.isOver) again(250)
     const result = s.ended && s.winner !== null ? resultFor(s.winner) : null
     if (s.ended && result === null) return end('The match ended with no result.')
-    await update($, view, v => ({
-      ...v,
-      battle: {
-        ...v.battle,
-        opponent: s.opponent ?? v.battle.opponent,
-        incoming: mergeIncoming(v.battle.incoming, s.incoming),
-        ...(s.ended ? { status: 'ended' as const, result } : {}),
-      },
-    }))
+    await update($, view, v => {
+      if (!live() || v.battle.roomId !== room) return v
+
+      return {
+        ...v,
+        battle: {
+          ...v.battle,
+          opponent: s.opponent ?? v.battle.opponent,
+          incoming: mergeIncoming(v.battle.incoming, s.incoming),
+          ...(s.ended ? { status: 'ended' as const, result } : {}),
+        },
+      }
+    })
   } finally {
     rt.isSyncing = false
     if (rt.wantsSync) {
@@ -491,13 +497,14 @@ async function flushSync($: EngineInterface) {
 
 async function endMatch($: EngineInterface, gen: number, notice: string) {
   if (!isLive(gen)) return
-  if ((await resetBattle($, false)) !== null) await setView($, { notice })
+  const reset = await resetBattle($, false)
+  if (reset !== null) await setViewIf($, reset, { notice })
 }
 
 async function startMarathon($: EngineInterface, nonce: number) {
   const gen = await resetBattle($, true)
   if (gen === null) return
-  await setView($, { notice: null })
+  await setViewIf($, gen, { notice: null })
   if (!isLive(gen)) return
   let gameId: string | null = null
   let seed = 0
@@ -513,7 +520,7 @@ async function startMarathon($: EngineInterface, nonce: number) {
       rt.games = [...rt.games, { key: g.gameId, base }].slice(-8)
     }
   }
-  await setView($, { marathon: { nonce, gameId, seed } })
+  await setViewIf($, gen, { marathon: { nonce, gameId, seed } })
 }
 
 // Retries only when the server could not answer (status 0) or said 503.

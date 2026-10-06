@@ -1156,7 +1156,7 @@ test('a match found on a server the player has left is not played on the new one
   for (let i = 0; i < 4; i++) await ui.advance(200)
   expect(seen.some(r => r.url.includes('/r1/'))).toBe(false)
   expect(await shown(ui)).not.toContain('bob')
-  expect(seen.filter(r => r.method === 'DELETE' && r.url === OFFICIAL_URL + '/v1/battle/queue')).toHaveLength(2)
+  expect(seen.filter(r => r.method === 'DELETE' && r.url === OFFICIAL_URL + '/v1/battle/queue')).toHaveLength(1)
 })
 
 test('a match that arrives after the player moved to another server does not replace the new search', async ($: Engine, on: On) => {
@@ -1205,7 +1205,7 @@ test('a match that arrives after the player moved to another server does not rep
   for (let i = 0; i < 4; i++) await ui.advance(200)
   expect(seen.some(r => r.url.includes('/r1/'))).toBe(false)
   expect(await shown(ui)).not.toContain('bob')
-  expect(seen.filter(r => r.method === 'DELETE' && r.url === OFFICIAL_URL + '/v1/battle/queue')).toHaveLength(2)
+  expect(seen.filter(r => r.method === 'DELETE' && r.url === OFFICIAL_URL + '/v1/battle/queue')).toHaveLength(1)
 })
 
 test('a sign-in cancelled by switching servers does not show its name on the new server', async ($: Engine, on: On) => {
@@ -1255,7 +1255,10 @@ test('a server still busy with the last match is asked again until the search gi
   const clock = mock.clock(on)
   let posts = 0
   const seen = serve(on, req => {
-    if (req.url === '/v1/battle/queue' && req.method === 'POST' && ++posts <= 2) return { status: 409, body: { error: 'already in a battle' } }
+    if (req.url === '/v1/battle/queue' && req.method === 'POST') {
+      posts++
+      return { status: 409, body: { error: 'already in a battle' } }
+    }
     return MATCH
   })
   const ui = await $.ui.mount(target('terminal'))
@@ -1267,6 +1270,12 @@ test('a server still busy with the last match is asked again until the search gi
   expect(posts).toBeGreaterThanOrEqual(3)
   expect(seen.some(r => r.method === 'DELETE')).toBe(false)
   expect(await shown(ui)).not.toContain('already in a battle')
+  await clock.advance(110_000)
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('Looking for an opponent')
+  await clock.advance(12_000)
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('No opponent found')
 })
 
 test('a search restarted while its first poll looks up the session still finds its match', async ($: Engine, on: On) => {
@@ -1299,7 +1308,7 @@ test('a search restarted while its first poll looks up the session still finds i
 })
 
 // The first queue POST answers with a match and, if asked, it and the first DELETE wait for the test.
-function heldQueue(on: On, hold: { post: boolean; del: boolean }) {
+function heldQueue(on: On, hold: { post: boolean; del: boolean }, later: unknown = MATCH.body) {
   store(on, SIGNED_IN)
   const seen: Seen[] = []
   const gates = { post: () => {}, del: () => {} }
@@ -1317,7 +1326,7 @@ function heldQueue(on: On, hold: { post: boolean; del: boolean }) {
       if (hold.del && ++dels === 1) await new Promise<void>(r => (gates.del = r))
       return { value: reply({}) }
     }
-    return { value: reply(path === '/v1/battle/queue' ? MATCH.body : { opponent: OPPONENT, incoming: [] }) }
+    return { value: reply(path === '/v1/battle/queue' ? later : { opponent: OPPONENT, incoming: [] }) }
   })
 
   return { seen, release: gates }
@@ -1354,7 +1363,7 @@ test('a slow DELETE from leaving does not stop the search started after it', asy
   expect(await shown(ui)).not.toContain('bob')
 })
 
-test('a match from a search the player left is cancelled, not adopted by the next search', async ($: Engine, on: On) => {
+test('a match from a search the player left is ignored, not adopted or cancelled', async ($: Engine, on: On) => {
   const clock = mock.clock(on)
   const q = heldQueue(on, { post: true, del: false })
   const ui = await $.ui.mount(target('terminal'))
@@ -1365,8 +1374,7 @@ test('a match from a search the player left is cancelled, not adopted by the nex
   q.release.post()
   await ui.advance(48)
   await ui.advance(48)
-  expect(deletes()).toHaveLength(2)
-  expect(deletes()[1]!.auth).toBe('Bearer sess_1')
+  expect(deletes()).toHaveLength(1)
   const before = queuePosts(q.seen)
   for (let i = 0; i < 3; i++) {
     await clock.advance(1_500)
@@ -1401,4 +1409,36 @@ test('a win counts for the login the match was made with, whatever the shown nam
   releaseSync()
   for (let i = 0; i < 6; i++) await ui.advance(200)
   expect(await shown(ui)).toContain('YOU WIN')
+})
+
+test('a stale match does not cancel the newer one the next search found', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const q = heldQueue(on, { post: true, del: false }, { status: 'matched', roomId: 'r2', seed: 7, opponent: { login: 'carol' } })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  await leaveAndSearchAgain(ui)
+  await clock.advance(1_500)
+  await ui.advance(48)
+  q.release.post()
+  for (let i = 0; i < 4; i++) await ui.advance(200)
+  expect(q.seen.filter(r => r.method === 'DELETE')).toHaveLength(1)
+  expect(q.seen.some(r => r.url.includes('/r2/sync'))).toBe(true)
+  expect(q.seen.some(r => r.url.includes('/r1/'))).toBe(false)
+})
+
+test('a late 401 for an old session leaves a newer stored session alone', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const saves = store(on, SIGNED_IN)
+  let release = () => {}
+  on('http.fetch', async () => {
+    await new Promise<void>(r => (release = r))
+    return { value: reply({ error: 'unknown session' }, 401) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  saves.set('session:' + OFFICIAL_URL, { session: 'sess_2', login: 'alice' })
+  release()
+  await ui.advance(48)
+  await ui.advance(48)
+  expect(saves.get('session:' + OFFICIAL_URL)).toEqual({ session: 'sess_2', login: 'alice' })
 })
