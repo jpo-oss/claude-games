@@ -74,6 +74,8 @@ const rt: {
   signInGen: number
   signInLine: string | null
   queueTimer: Timer | null
+  // Bumped whenever a search starts or stops, so a poll that resumes into a different one drops its reply.
+  queueGen: number
   isPolling: boolean
   isSyncing: boolean
   outbox: Outbox
@@ -102,6 +104,7 @@ const rt: {
   signInGen: 0,
   signInLine: null,
   queueTimer: null,
+  queueGen: 0,
   isPolling: false,
   isSyncing: false,
   outbox: emptyOutbox(),
@@ -240,6 +243,7 @@ async function startSignIn($: EngineInterface) {
         if (!s) return end(r.ok ? DOWN : noticeFor(r))
         rt.session = { base, s }
         await $.store.set(sessionKey(base), s)
+        if (!live() || base !== rt.base) return
         await setView($, { me: s.login })
         await end(`Signed in as ${s.login}.`)
         void prefetchBest($)
@@ -297,6 +301,7 @@ async function prefetchBest($: EngineInterface) {
 function stopQueue() {
   rt.queueTimer?.cancel()
   rt.queueTimer = null
+  rt.queueGen++
 }
 
 async function resetBattle($: EngineInterface, isLeaving: boolean) {
@@ -314,20 +319,27 @@ async function resetBattle($: EngineInterface, isLeaving: boolean) {
 async function pollQueue($: EngineInterface, startedAt: number) {
   if (rt.isPolling || rt.queueTimer === null) return
   rt.isPolling = true
+  const gen = rt.queueGen
+  const base = rt.base
+  const current = () => gen === rt.queueGen && rt.queueTimer !== null && base === rt.base
   try {
-    if ((await $.clock.now()) - startedAt > QUEUE_GIVE_UP_MS) {
+    const now = await $.clock.now()
+    if (!current()) return
+    if (now - startedAt > QUEUE_GIVE_UP_MS) {
       await resetBattle($, true)
       await setView($, { notice: 'No opponent found. Try again in a moment.' })
 
       return
     }
-    const base = rt.base
     const r = await api($, 'POST', '/v1/battle/queue', undefined, base)
     if (base !== rt.base) {
       if (r.ok) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
 
       return
     }
+    if (!current()) return
+    // The server says 409 while it still holds the last match; that clears on its own.
+    if (r.status === 409) return
     if (!r.ok) {
       stopQueue()
       if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue')
@@ -337,11 +349,13 @@ async function pollQueue($: EngineInterface, startedAt: number) {
       return
     }
     const q = parseQueue(r.data)
-    if (q?.status === 'matched' && rt.queueTimer !== null) {
+    if (q?.status === 'matched') {
+      const now = await $.clock.now()
+      if (!current()) return
       stopQueue()
       rt.opponentLogin = q.opponent
       rt.rooms = [...rt.rooms, { key: q.roomId, base }].slice(-8)
-      rt.lastSyncOk = await $.clock.now()
+      rt.lastSyncOk = now
       // Room for the big board and the opponent's beside it; a width the person dragged still wins.
       $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
       await setBattle($, {

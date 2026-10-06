@@ -1142,11 +1142,132 @@ test('a match found on a server the player has left is not played on the new one
   await ui.key({ key: 'return' })
   await ui.advance(48)
   release()
-  for (let i = 0; i < 3; i++) {
-    await ui.advance(48)
-    await clock.advance(1_500)
-  }
   for (let i = 0; i < 4; i++) await ui.advance(200)
-  expect(seen.some(r => r.url.startsWith(ACME + '/v1/battle/queue'))).toBe(true)
   expect(seen.some(r => r.url.includes('/r1/'))).toBe(false)
+  expect(await shown(ui)).not.toContain('bob')
+})
+
+test('a match that arrives after the player moved to another server does not replace the new search', async ($: Engine, on: On) => {
+  let gate: Promise<void> | null = null
+  let release = () => {}
+  let holdNextNow = false
+  // Timers never fire here, so only the first poll of each search runs; clock.now can be held.
+  on('clock.now', async () => {
+    if (holdNextNow) {
+      holdNextNow = false
+      gate = new Promise<void>(r => (release = r))
+    }
+    if (gate) await gate
+    return { value: 0 }
+  })
+  for (const wait of ['clock.sleep', 'clock.after', 'clock.every'] as const) on(wait, () => new Promise(() => undefined))
+  store(on, BOTH)
+  const seen: Seen[] = []
+  on('http.fetch', async (_$, e) => {
+    seen.push({ method: e.init?.method ?? 'GET', url: e.url, auth: e.init?.headers?.Authorization ?? '', body: undefined })
+    const path = new URL(e.url).pathname
+    if (path === '/v1/battle/queue' && e.init?.method === 'POST' && e.url.startsWith(OFFICIAL_URL)) {
+      holdNextNow = true
+      return { value: reply({ status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } }) }
+    }
+    return { value: reply(path === '/v1/battle/queue' ? MATCH.body : { opponent: OPPONENT, incoming: [] }) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  const held = gate
+  gate = null
+  await ui.key({ key: 'q' })
+  await ui.advance(48)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await typeText(ui, ACME)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  expect(held).not.toBeNull()
+  release()
+  for (let i = 0; i < 4; i++) await ui.advance(200)
+  expect(seen.some(r => r.url.includes('/r1/'))).toBe(false)
+  expect(await shown(ui)).not.toContain('bob')
+})
+
+test('a sign-in cancelled by switching servers does not show its name on the new server', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const m = new Map<string, unknown>([['session:' + ACME, { session: 'acme_sess', login: 'dave' }]])
+  let release = () => {}
+  let isHeld = false
+  on('store.get', async (_$, e) => ({ value: m.get(e.key) }))
+  on('store.set', async (_$, e) => {
+    if (e.key === 'session:' + OFFICIAL_URL && !isHeld) {
+      isHeld = true
+      await new Promise<void>(r => (release = r))
+    }
+    m.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('store.delete', async (_$, e) => {
+    m.delete(e.key)
+    return { value: undefined }
+  })
+  on('store.keys', async () => ({ value: [...m.keys()] }))
+  const polls = [{ access_token: 'gho_secret', scope: '' }]
+  on('http.fetch', async (_$, e) => {
+    if (e.url === 'https://github.com/login/device/code') return { value: reply(DEVICE) }
+    if (e.url === 'https://github.com/login/oauth/access_token') return { value: reply(polls.shift() ?? { error: 'authorization_pending' }) }
+    const path = new URL(e.url).pathname
+    if (path === '/v1/config') return { value: reply({ githubClientId: 'Iv1.test' }) }
+    if (path === '/v1/session') return { value: reply({ session: 'sess_9', login: 'carol' }) }
+    if (path === '/v1/leaderboard') return { value: reply({ marathon: [], wins: [{ login: 'carol', wins: 3 }, { login: 'dave', wins: 1 }] }) }
+    return { value: reply(MATCH.body) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  await clock.advance(5_000)
+  await ui.advance(48)
+  expect(isHeld).toBe(true)
+  await ui.key({ key: 'q' })
+  await ui.key({ key: 'up' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await typeText(ui, ACME)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  release()
+  await ui.advance(48)
+  await ui.key({ key: 'q' })
+  await ui.advance(48)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('games.acme.dev')
+  const carol = await ui.find({ type: 'Text', text: /carol/, in: 'game' })
+  const dave = await ui.find({ type: 'Text', text: /dave/, in: 'game' })
+  expect(dave?.props.inverse).toBe(true)
+  expect(carol?.props.inverse).toBe(false)
+})
+
+test('a server still busy with the last match is asked again until the search gives up', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  let posts = 0
+  const seen = serve(on, req => {
+    if (req.url === '/v1/battle/queue' && req.method === 'POST' && ++posts <= 2) return { status: 409, body: { error: 'already in a battle' } }
+    return MATCH
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  for (let i = 0; i < 3; i++) {
+    await clock.advance(1_500)
+    await ui.advance(48)
+  }
+  expect(posts).toBeGreaterThanOrEqual(3)
+  expect(seen.some(r => r.method === 'DELETE')).toBe(false)
+  expect(await shown(ui)).not.toContain('already in a battle')
 })
