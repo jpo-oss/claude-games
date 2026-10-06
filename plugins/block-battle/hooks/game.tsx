@@ -57,6 +57,8 @@ const emptyProps = (): GameView => ({
   notice: null,
   battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null },
   servers: { home: '', isHomeOfficial: true, last: null, active: '' },
+  marathon: null,
+  uploaded: null,
 })
 
 const newLive = (props: GameView): Live => ({
@@ -322,9 +324,7 @@ function tick(live: Live) {
 
     if (now.isOver && !live.hasPostedOver) {
       live.hasPostedOver = true
-      if (live.mode === 'marathon') {
-        live.outbox.push({ type: 'gameOver', score: now.score, lines: now.lines, level: now.level, durationMs: Math.round(now.elapsedMs) })
-      } else {
+      if (live.mode !== 'marathon') {
         live.outbox.push({ type: 'sync', seq: ++live.seq, attacks: live.attacks.splice(0), snapshot: snapshot(now), isOver: true })
       }
     }

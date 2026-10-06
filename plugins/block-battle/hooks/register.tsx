@@ -34,6 +34,8 @@ const startView = (): GameView => ({
   notice: null,
   battle: idleBattle(),
   servers: { home: OFFICIAL, isHomeOfficial: true, last: null, active: OFFICIAL },
+  marathon: null,
+  uploaded: null,
 })
 
 const view = atom({ plugin: 'block-battle', key: 'view' } as const, startView())
@@ -263,19 +265,6 @@ async function prefetchBest($: EngineInterface) {
   if (board) await setView($, { leaderboard: board })
 }
 
-async function submitScore($: EngineInterface, m: Extract<ClientMsg, { type: 'gameOver' }>) {
-  if ((await loadSession($)) === null) return
-  const r = await api($, 'POST', '/v1/scores', {
-    mode: 'marathon',
-    score: m.score,
-    lines: m.lines,
-    level: m.level,
-    durationMs: Math.max(1, m.durationMs),
-  })
-  const board = r.ok ? parseLeaderboard(r.data) : null
-  if (board) await setView($, { leaderboard: board, notice: null })
-}
-
 function stopQueue() {
   rt.queueTimer?.cancel()
   rt.queueTimer = null
@@ -360,14 +349,14 @@ async function flushSync($: EngineInterface) {
     rt.lastSyncOk = await $.clock.now()
     const s = parseSync(r.data)
     if (!s) return
-    if (s.winner !== null && resultFor(s.winner, (await read($, view)).me) === null) return endMatch($, 'The match ended with no result.')
+    if (s.ended && (s.winner === null || resultFor(s.winner, (await read($, view)).me) === null)) return endMatch($, 'The match ended with no result.')
     await update($, view, v => ({
       ...v,
       battle: {
         ...v.battle,
         opponent: s.opponent ?? v.battle.opponent,
         incoming: mergeIncoming(v.battle.incoming, s.incoming),
-        ...(s.winner === null ? {} : { status: 'ended' as const, result: resultFor(s.winner, v.me) }),
+        ...(!s.ended ? {} : { status: 'ended' as const, result: resultFor(s.winner as string, v.me) }),
       },
     }))
   } finally {
@@ -397,7 +386,7 @@ async function handle($: EngineInterface, m: ClientMsg) {
 
     return resetBattle($, true)
   }
-  if (m.type === 'gameOver') return submitScore($, m)
+  if (m.type !== 'sync') return
   const { battle } = await read($, view)
   if (battle.status !== 'matched') return
   rt.latest = { snapshot: m.snapshot, isOver: m.isOver }

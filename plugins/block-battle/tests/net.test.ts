@@ -10,6 +10,7 @@ import {
   nextPayload,
   parseClientMsg,
   parseLeaderboard,
+  parseMarathonStart,
   parseQueue,
   parseSync,
   queueAttacks,
@@ -21,7 +22,7 @@ import {
 test('a GET carries the session, the protocol version and no body; trailing slashes go', () => {
   expect(buildRequest('https://games.example/', 'GET', '/v1/leaderboard', 'tok')).toEqual({
     url: 'https://games.example/v1/leaderboard',
-    init: { method: 'GET', headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '1' } },
+    init: { method: 'GET', headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '2' } },
   })
 })
 
@@ -30,7 +31,7 @@ test('a POST sends JSON with a content type', () => {
     url: 'http://localhost:8787/v1/scores',
     init: {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '1', 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '2', 'Content-Type': 'application/json' },
       body: '{"mode":"marathon","score":5}',
     },
   })
@@ -39,7 +40,7 @@ test('a POST sends JSON with a content type', () => {
 test('a request without a session has no Authorization header', () => {
   expect(buildRequest('https://games.example', 'POST', '/v1/session', null, { githubToken: 'gho_x' }).init.headers).toEqual({
     Accept: 'application/json',
-    'X-Protocol-Version': '1',
+    'X-Protocol-Version': '2',
     'Content-Type': 'application/json',
   })
 })
@@ -55,16 +56,12 @@ test('call: ok body, server error, plain-text failure and network failure', asyn
   expect(await call(down, 'http://x', 'GET', '/p', 't')).toEqual({ ok: false, status: 0, error: 'unreachable' })
 })
 
-test('incoming attacks merge by id: a repeat is dropped, new ones append, the list is capped', () => {
+test('incoming attacks merge by id: a repeat is dropped, new ones append, nothing is capped', () => {
   const a = { id: 1, lines: 2 }
   const b = { id: 2, lines: 4 }
   expect(mergeIncoming([a], [a, b])).toEqual([a, b])
   expect(mergeIncoming([a, b], [b, b, a])).toEqual([a, b])
   expect(mergeIncoming([], [a, a])).toEqual([a])
-  const many = Array.from({ length: 70 }, (_, i) => ({ id: i + 1, lines: 1 }))
-  const merged = mergeIncoming([], many)
-  expect(merged).toHaveLength(60)
-  expect(merged[0]).toEqual({ id: 11, lines: 1 })
 })
 
 test('outbox: a failed send is retried with the same seq and attacks; later attacks wait', () => {
@@ -94,6 +91,7 @@ test('the server reply is read as the room sends it', () => {
   expect(parseSync(reply)).toEqual({
     opponent: { login: 'bob', snapshot: '.'.repeat(200), isOver: false },
     incoming: [{ id: 5, lines: 2 }],
+    ended: true,
     winner: 'bob',
   })
   expect(parseSync({ opponent: { login: 'bob' }, incoming: [] })?.winner).toBe(null)
@@ -123,10 +121,6 @@ test('what a Client posts is validated before it is acted on', () => {
   expect(parseClientMsg({ type: 'menu', choice: 'battle' })).toBe(null)
   expect(parseClientMsg({ type: 'menu', choice: 'battle', server: 'http://evil.example' })).toBe(null)
   expect(parseClientMsg({ type: 'menu', choice: 'wipe' })).toBe(null)
-  expect(parseClientMsg({ type: 'gameOver', score: 10, lines: 1, level: 1, durationMs: 5000 })).toEqual({
-    type: 'gameOver', score: 10, lines: 1, level: 1, durationMs: 5000,
-  })
-  expect(parseClientMsg({ type: 'gameOver', score: 'ten', lines: 1, level: 1, durationMs: 5 })).toBe(null)
   expect(parseClientMsg({ type: 'sync', seq: 3, attacks: [2], snapshot: '.', isOver: false })).toEqual({
     type: 'sync', seq: 3, attacks: [2], snapshot: '.', isOver: false,
   })
@@ -135,11 +129,11 @@ test('what a Client posts is validated before it is acted on', () => {
   expect(parseClientMsg(7)).toBe(null)
 })
 
-test('sync drops attacks that are not whole numbers from 1 to 40, and keeps at most 60', () => {
+test('sync drops attacks that are not whole numbers from 1 to 40, and keeps at most 10,000', () => {
   const bad = [{ id: 1, lines: 1e9 }, { id: 2, lines: 2.5 }, { id: 3, lines: 0 }, { id: 4, lines: 41 }, { id: 5, lines: 3 }]
   expect(parseSync({ incoming: bad })?.incoming).toEqual([{ id: 5, lines: 3 }])
   const many = Array.from({ length: 10_000 }, (_, i) => ({ id: i, lines: 1 }))
-  expect(parseSync({ incoming: many })?.incoming.length).toBe(60)
+  expect(parseSync({ incoming: many })?.incoming.length).toBe(10_000)
 })
 
 test('sync rejects an opponent with a bad login or snapshot', () => {
@@ -199,4 +193,48 @@ test('an answered request cancels its give-up timer', async () => {
     return new Promise(() => undefined)
   })
   expect(aborted).toBe(true)
+})
+
+test('protocol 2 header', () => {
+  expect(buildRequest('https://x.example', 'GET', '/v1/leaderboard', null).init.headers?.['X-Protocol-Version']).toBe('2')
+})
+
+test('parseClientMsg: marathon carries a nonce, gameOver is gone', () => {
+  expect(parseClientMsg({ type: 'menu', choice: 'marathon', nonce: 3 })).toEqual({ type: 'menu', choice: 'marathon', nonce: 3 })
+  expect(parseClientMsg({ type: 'menu', choice: 'marathon' })).toBe(null)
+  expect(parseClientMsg({ type: 'gameOver', score: 10, lines: 1, level: 1, durationMs: 5000 })).toBe(null)
+})
+
+test('parseClientMsg: log chunks are checked for shape and bounds', () => {
+  const ok = { type: 'log', kind: 'battle', key: 'r1', steps: 10, inputsLen: 2, total: 4, at: 0, values: [0, 1, 3, 7] }
+  expect(parseClientMsg(ok)).toEqual(ok)
+  expect(parseClientMsg({ ...ok, kind: 'other' })).toBe(null)
+  expect(parseClientMsg({ ...ok, key: 'a/b' })).toBe(null)
+  expect(parseClientMsg({ ...ok, steps: 0 })).toBe(null)
+  expect(parseClientMsg({ ...ok, steps: 450_001 })).toBe(null)
+  expect(parseClientMsg({ ...ok, inputsLen: 3 })).toBe(null)
+  expect(parseClientMsg({ ...ok, inputsLen: 6 })).toBe(null)
+  expect(parseClientMsg({ ...ok, total: 420_002 })).toBe(null)
+  expect(parseClientMsg({ ...ok, at: 3 })).toBe(null)
+  expect(parseClientMsg({ ...ok, values: new Array(10_001).fill(0) })).toBe(null)
+  expect(parseClientMsg({ ...ok, values: [0, 'x'] })).toBe(null)
+})
+
+test('parseSync: a result with no winner still ends the match', () => {
+  expect(parseSync({ opponent: null, incoming: [], result: { winner: null } })).toMatchObject({ ended: true, winner: null })
+  expect(parseSync({ opponent: null, incoming: [], result: { winner: 'bob' } })).toMatchObject({ ended: true, winner: 'bob' })
+  expect(parseSync({ opponent: null, incoming: [] })).toMatchObject({ ended: false, winner: null })
+})
+
+test('incoming attacks are never capped at 60', () => {
+  const many = Array.from({ length: 100 }, (_, i) => ({ id: i + 1, lines: 1 }))
+  expect(parseSync({ opponent: null, incoming: many })?.incoming).toHaveLength(100)
+  expect(mergeIncoming(many.slice(0, 70), many)).toHaveLength(100)
+})
+
+test('parseMarathonStart', () => {
+  expect(parseMarathonStart({ gameId: 'g_1', seed: 42 })).toEqual({ gameId: 'g_1', seed: 42 })
+  expect(parseMarathonStart({ gameId: 'g 1', seed: 42 })).toBe(null)
+  expect(parseMarathonStart({ gameId: 'g1', seed: -1 })).toBe(null)
+  expect(parseMarathonStart({ gameId: 'g1', seed: 2 ** 32 })).toBe(null)
 })

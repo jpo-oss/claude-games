@@ -1,5 +1,7 @@
 import type { HttpInit, HttpResponse } from 'claude-code'
 
+import { CHUNK, MAX_STEPS } from './log'
+import type { LogMsg } from './log'
 import type { ClientMsg, Incoming, Leaderboard, Opponent } from '../types'
 
 export type Fetch = (url: string, init?: HttpInit) => Promise<HttpResponse>
@@ -24,9 +26,12 @@ export const withGiveUp =
 
 export type Reply<T> = { ok: true; data: T } | { ok: false; status: number; error: string }
 
-export const MAX_INCOMING = 60
+export const MAX_INCOMING = 10_000
 
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
+const KEY = /^[A-Za-z0-9_-]{1,64}$/
+// 200,000 input pairs and 10,000 garbage pairs, the server's caps.
+const MAX_STREAM = 420_000
 
 export function serverUrlOk(u: string): boolean {
   if (u.length > 200) return false
@@ -87,7 +92,6 @@ export async function call(
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 const LOGIN = /^[A-Za-z0-9-]{1,39}$/
-const ROOM = /^[A-Za-z0-9_-]{1,64}$/
 const SNAPSHOT = /^[.IOTSZJLG]{0,400}$/
 export const login = (v: unknown): string | null => (typeof v === 'string' && LOGIN.test(v) ? v : null)
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -115,7 +119,7 @@ export type QueueReply =
 export function parseQueue(data: unknown): QueueReply | null {
   if (!isRecord(data)) return null
   if (data.status === 'waiting') return { status: 'waiting' }
-  if (data.status === 'matched' && typeof data.roomId === 'string' && ROOM.test(data.roomId) && count(data.seed)) {
+  if (data.status === 'matched' && typeof data.roomId === 'string' && KEY.test(data.roomId) && count(data.seed)) {
     const opp = isRecord(data.opponent) ? login(data.opponent.login) : null
     if (opp) return { status: 'matched', roomId: data.roomId, seed: data.seed, opponent: opp }
   }
@@ -123,7 +127,14 @@ export function parseQueue(data: unknown): QueueReply | null {
   return null
 }
 
-export type SyncReply = { opponent: Opponent | null; incoming: Incoming[]; winner: string | null }
+export function parseMarathonStart(data: unknown): { gameId: string; seed: number } | null {
+  if (!isRecord(data) || typeof data.gameId !== 'string' || !KEY.test(data.gameId)) return null
+  const { seed } = data
+
+  return count(seed) && seed < 2 ** 32 ? { gameId: data.gameId, seed } : null
+}
+
+export type SyncReply = { opponent: Opponent | null; incoming: Incoming[]; ended: boolean; winner: string | null }
 
 export function parseSync(data: unknown): SyncReply | null {
   if (!isRecord(data)) return null
@@ -138,9 +149,10 @@ export function parseSync(data: unknown): SyncReply | null {
         .filter(a => count(a.id) && Number.isInteger(a.lines) && (a.lines as number) >= 1 && (a.lines as number) <= 40)
         .map(a => ({ id: a.id as number, lines: a.lines as number }))
     : []
-  const winner = isRecord(data.result) ? login(data.result.winner) : null
+  const ended = isRecord(data.result)
+  const winner = ended ? login((data.result as Record<string, unknown>).winner) : null
 
-  return { opponent: opp, incoming, winner }
+  return { opponent: opp, incoming, ended, winner }
 }
 
 // The server may redeliver a batch when a poll is retried; the id is the identity, so keep the first copy of each.
@@ -148,7 +160,7 @@ export function mergeIncoming(have: readonly Incoming[], got: readonly Incoming[
   const seen = new Set(have.map(a => a.id))
   const fresh = got.filter(a => !seen.has(a.id) && seen.add(a.id))
 
-  return [...have, ...fresh].slice(-MAX_INCOMING)
+  return [...have, ...fresh]
 }
 
 // Attacks go out in a payload with a seq. A failed send is retried with the same seq and the
@@ -180,14 +192,11 @@ export function parseClientMsg(data: unknown): ClientMsg | null {
   if (data.type === 'menu') {
     const c = data.choice
     if (c === 'battle') return typeof data.server === 'string' && serverUrlOk(data.server) ? { type: 'menu', choice: c, server: data.server } : null
-    return c === 'marathon' || c === 'leaderboard' || c === 'back' ? { type: 'menu', choice: c } : null
+    if (c === 'marathon') return count(data.nonce) ? { type: 'menu', choice: c, nonce: data.nonce } : null
+
+    return c === 'leaderboard' || c === 'back' ? { type: 'menu', choice: c } : null
   }
-  if (data.type === 'gameOver') {
-    const { score, lines, level, durationMs } = data
-    return [score, lines, level, durationMs].every(Number.isInteger)
-      ? { type: 'gameOver', score: score as number, lines: lines as number, level: level as number, durationMs: durationMs as number }
-      : null
-  }
+  if (data.type === 'log') return parseLogMsg(data)
   if (data.type === 'sync') {
     const { snapshot, isOver, attacks } = data
     if (typeof snapshot !== 'string' || snapshot.length > 400 || typeof isOver !== 'boolean') return null
@@ -197,4 +206,17 @@ export function parseClientMsg(data: unknown): ClientMsg | null {
   }
 
   return null
+}
+
+function parseLogMsg(d: Record<string, unknown>): LogMsg | null {
+  const { kind, key, steps, inputsLen, total, at, values } = d
+  if (kind !== 'marathon' && kind !== 'battle') return null
+  if (typeof key !== 'string' || !KEY.test(key)) return null
+  if (!count(steps) || steps < 1 || steps > MAX_STEPS) return null
+  if (!count(total) || total > MAX_STREAM || total % 2 !== 0) return null
+  if (!count(inputsLen) || inputsLen % 2 !== 0 || inputsLen > total) return null
+  if (!count(at) || at > total) return null
+  if (!Array.isArray(values) || values.length > CHUNK || at + values.length > total || !values.every(count)) return null
+
+  return { type: 'log', kind, key, steps, inputsLen, total, at, values: values as number[] }
 }

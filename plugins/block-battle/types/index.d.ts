@@ -22,6 +22,8 @@ export type GameView = {
   notice: string | null
   battle: Battle
   servers: Servers
+  marathon: { nonce: number; gameId: string | null; seed: number } | null
+  uploaded: { key: string; have: number } | null
 }
 
 export type Servers = {
@@ -36,10 +38,11 @@ export type Servers = {
 // Everything a Client posts to the hooks side. Attacks ride inside `sync`: a post
 // replaces an undelivered one within a frame, so a separate message could be lost.
 export type ClientMsg =
-  | { type: 'menu'; choice: 'marathon' | 'leaderboard' | 'back' }
+  | { type: 'menu'; choice: 'leaderboard' | 'back' }
+  | { type: 'menu'; choice: 'marathon'; nonce: number }
   | { type: 'menu'; choice: 'battle'; server: string }
-  | { type: 'gameOver'; score: number; lines: number; level: number; durationMs: number }
   | { type: 'sync'; seq: number; attacks: number[]; snapshot: string; isOver: boolean }
+  | { type: 'log'; kind: 'marathon' | 'battle'; key: string; steps: number; inputsLen: number; total: number; at: number; values: number[] }
 
 declare module 'claude-code' {
   interface PluginState {
