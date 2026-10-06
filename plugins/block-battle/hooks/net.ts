@@ -4,6 +4,24 @@ import type { ClientMsg, Incoming, Leaderboard, Opponent } from '../types'
 
 export type Fetch = (url: string, init?: HttpInit) => Promise<HttpResponse>
 
+export type GiveUp = (signal: AbortSignal) => Promise<void>
+
+// The returned fetch rejects once giveUp resolves, and cancels giveUp once the request settles.
+export const withGiveUp =
+  (fetch: Fetch, giveUp: GiveUp): Fetch =>
+  async (url, init) => {
+    const stop = new AbortController()
+    const timedOut = giveUp(stop.signal).then(
+      () => Promise.reject(new Error('timed out')),
+      () => new Promise<never>(() => undefined),
+    )
+    try {
+      return await Promise.race([fetch(url, init), timedOut])
+    } finally {
+      stop.abort()
+    }
+  }
+
 export type Reply<T> = { ok: true; data: T } | { ok: false; status: number; error: string }
 
 export const MAX_INCOMING = 60
@@ -46,17 +64,11 @@ export async function call(
   path: string,
   token: string | null,
   body?: unknown,
-  giveUp: (signal: AbortSignal) => Promise<void> = () => new Promise(() => undefined),
+  giveUp: GiveUp = () => new Promise(() => undefined),
 ): Promise<Reply<unknown>> {
   const { url, init } = buildRequest(base, method, path, token, body)
-  const stop = new AbortController()
-  const timedOut = giveUp(stop.signal).then(
-    () => null,
-    () => new Promise<never>(() => undefined),
-  )
   try {
-    const res = await Promise.race([fetch(url, init), timedOut])
-    if (res === null) return { ok: false, status: 0, error: 'unreachable' }
+    const res = await withGiveUp(fetch, giveUp)(url, init)
     let data: unknown = null
     try {
       data = JSON.parse(res.text)
@@ -69,8 +81,6 @@ export async function call(
     return { ok: false, status: res.status, error: typeof error === 'string' ? cleanText(error) : `HTTP ${res.status}` }
   } catch {
     return { ok: false, status: 0, error: 'unreachable' }
-  } finally {
-    stop.abort()
   }
 }
 
@@ -78,10 +88,10 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const LOGIN = /^[A-Za-z0-9-]{1,39}$/
 const ROOM = /^[A-Za-z0-9_-]{1,64}$/
 const SNAPSHOT = /^[.IOTSZJLG]{0,400}$/
-const login = (v: unknown): string | null => (typeof v === 'string' && LOGIN.test(v) ? v : null)
+export const login = (v: unknown): string | null => (typeof v === 'string' && LOGIN.test(v) ? v : null)
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 const count = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
-export const cleanText = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, 120)
+export const cleanText = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 120)
 
 export function parseLeaderboard(data: unknown): Leaderboard | null {
   if (!isRecord(data) || !Array.isArray(data.marathon) || !Array.isArray(data.wins)) return null

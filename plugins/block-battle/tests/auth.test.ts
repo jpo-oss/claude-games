@@ -70,3 +70,16 @@ test('the server config must name a well-formed client ID', () => {
   expect(parseConfig({ githubClientId: 'x'.repeat(65) })).toBeNull()
   expect(parseConfig('nope')).toBeNull()
 })
+
+test('a session reply with a login GitHub would never issue is rejected', () => {
+  expect(parseSession({ session: 's1', login: 'evil\u202Eeman' })).toBeNull()
+  expect(parseSession({ session: 's1', login: 'x'.repeat(40) })).toBeNull()
+  expect(parseSession({ session: 'bad\nkey', login: 'alice' })).toBeNull()
+  expect(parseSession({ session: 'k'.repeat(201), login: 'alice' })).toBeNull()
+})
+
+test('GitHub requests give up instead of hanging', async () => {
+  const never: Fetch = () => new Promise(() => undefined)
+  expect(await requestDeviceCode(never, 'Iv1.abc', () => Promise.resolve())).toBeNull()
+  expect(await pollToken(never, 'Iv1.abc', 'dc', () => Promise.resolve())).toEqual({ kind: 'pending' })
+})

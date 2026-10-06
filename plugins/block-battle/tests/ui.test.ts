@@ -153,7 +153,7 @@ test('an outdated game tells the player how to update', async ($: Engine, on: On
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
-  expect(await shown(ui)).toContain('Run /plugin update block-battle@claude-games')
+  expect(await shown(ui)).toContain('claude plugin update block-battle@claude-games')
 })
 
 test('the leaderboard shows both columns and marks your own row', async ($: Engine, on: On) => {
@@ -560,4 +560,50 @@ test('signing out with no session still answers', async ($: Engine, on: On) => {
   const ran = await $.command.run({ command: 'cg-block-battle', args: 'signout' })
   expect(JSON.stringify(ran)).toContain('Not signed in')
   expect(seen).toHaveLength(0)
+})
+
+async function startBattle(ui: Ui) {
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+}
+
+test('a battle whose server stops answering goes back to the lobby and says so', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  store(on, SIGNED_IN)
+  on('http.fetch', async (_$, e) => {
+    if (new URL(e.url).pathname === '/v1/battle/queue') return { value: reply({ status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } }) }
+    return new Promise(() => undefined)
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  for (let i = 0; i < 4; i++) await ui.advance(200)
+  await clock.advance(31_000)
+  for (let i = 0; i < 4; i++) await ui.advance(200)
+  expect(await shown(ui)).toContain('Game server unreachable')
+})
+
+test('a battle that ends with no winner goes back to the lobby', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: 'mallory' } } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  for (let i = 0; i < 6; i++) await ui.advance(200)
+  expect(await shown(ui)).toContain('The match ended with no result')
+})
+
+test('a match the server drops goes back to the lobby with the reason', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    return { status: 404, body: { error: 'no such room' } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  for (let i = 0; i < 6; i++) await ui.advance(200)
+  expect(await shown(ui)).toContain('The match is no longer available')
 })

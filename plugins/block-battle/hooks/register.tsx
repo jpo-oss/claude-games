@@ -32,7 +32,7 @@ const view = atom({ plugin: 'block-battle', key: 'view' } as const, startView())
 
 const DOWN = 'Game server unreachable. Solo play still works.'
 const SIGNED_OUT = 'Signed out. Pick Battle or Leaderboard to sign in again.'
-const OUTDATED = 'Block Battle is out of date. Run /plugin update block-battle@claude-games'
+const OUTDATED = 'Block Battle is out of date. Run claude plugin update block-battle@claude-games in your shell, then /reload-plugins.'
 const SIGNING_IN = 'Signing in with GitHub...'
 const NO_SIGNIN = "This server isn't set up for sign-in."
 const BAD_URL = 'The server address must start with https://. Change it in the plugin settings.'
@@ -56,6 +56,7 @@ const rt: {
   outbox: Outbox
   latest: { snapshot: string; isOver: boolean }
   opponentLogin: string
+  lastSyncOk: number
   isAsking: boolean
   nudge: Timer | null
   isTurnOn: boolean
@@ -73,6 +74,7 @@ const rt: {
   outbox: emptyOutbox(),
   latest: { snapshot: '', isOver: false },
   opponentLogin: '',
+  lastSyncOk: 0,
   isAsking: false,
   nudge: null,
   isTurnOn: false,
@@ -139,7 +141,7 @@ async function startSignIn($: EngineInterface) {
     if (!config.ok) return end(noticeFor(config))
     const clientId = parseConfig(config.data)
     if (!clientId) return end(NO_SIGNIN)
-    const code = await requestDeviceCode(fetch, clientId)
+    const code = await requestDeviceCode(fetch, clientId, giveUp)
     if (!live()) return
     if (!code) return end(NO_GITHUB)
     rt.signInLine = signInLine(code.uri, code.userCode)
@@ -150,7 +152,7 @@ async function startSignIn($: EngineInterface) {
       try {
         if (!live()) return
         if ((await $.clock.now()) - startedAt > code.expiresIn * 1000) return end(CANCELLED)
-        const poll = await pollToken(fetch, clientId, code.deviceCode)
+        const poll = await pollToken(fetch, clientId, code.deviceCode, giveUp)
         if (!live()) return
         if (poll.kind === 'pending' || poll.kind === 'slowDown') {
           if (poll.kind === 'slowDown') interval += 5
@@ -268,6 +270,7 @@ async function pollQueue($: EngineInterface, startedAt: number) {
     if (q?.status === 'matched' && rt.queueTimer !== null) {
       stopQueue()
       rt.opponentLogin = q.opponent
+      rt.lastSyncOk = await $.clock.now()
       // Room for the big board and the opponent's beside it; a width the person dragged still wins.
       $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
       await setBattle($, {
@@ -302,22 +305,18 @@ async function flushSync($: EngineInterface) {
     const { seq, attacks } = nextPayload(rt.outbox)
     const r = await api($, 'POST', `/v1/battle/${encodeURIComponent(battle.roomId)}/sync`, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver })
     if (!r.ok) {
-      if (r.status === 404 || r.status === 403) {
-        await setBattle($, { status: 'ended', result: null })
-        await setView($, { notice: 'The match is no longer available.' })
-      } else if (r.status === 410) {
-        await resetBattle($, false)
-        await setView($, { notice: 'Match cancelled: your opponent left before it started.' })
-      } else if (r.status === 401) {
-        await setBattle($, { status: 'ended', result: null })
-        await setView($, { notice: fail(r) })
-      }
+      if (r.status === 404 || r.status === 403) await endMatch($, 'The match is no longer available.')
+      else if (r.status === 410) await endMatch($, 'Match cancelled: your opponent left before it started.')
+      else if (r.status === 401) await endMatch($, fail(r))
+      else if (r.status === 0 && (await $.clock.now()) - rt.lastSyncOk >= TIMEOUT_MS) await endMatch($, DOWN)
 
       return
     }
     rt.outbox.inflight = null
+    rt.lastSyncOk = await $.clock.now()
     const s = parseSync(r.data)
     if (!s) return
+    if (s.winner !== null && resultFor(s.winner, (await read($, view)).me) === null) return endMatch($, 'The match ended with no result.')
     await update($, view, v => ({
       ...v,
       battle: {
@@ -330,6 +329,11 @@ async function flushSync($: EngineInterface) {
   } finally {
     rt.isSyncing = false
   }
+}
+
+async function endMatch($: EngineInterface, notice: string) {
+  await resetBattle($, false)
+  await setView($, { notice })
 }
 
 async function handle($: EngineInterface, m: ClientMsg) {

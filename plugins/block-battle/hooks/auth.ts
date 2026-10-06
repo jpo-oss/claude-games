@@ -1,4 +1,5 @@
-import type { Fetch } from './net'
+import { login, withGiveUp } from './net'
+import type { Fetch, GiveUp } from './net'
 
 const DEVICE_URL = 'https://github.com/login/device/code'
 const TOKEN_URL = 'https://github.com/login/oauth/access_token'
@@ -16,6 +17,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null)
 
 const CLIENT_ID = /^[A-Za-z0-9._-]{1,64}$/
+const SESSION = /^[\x21-\x7e]{1,200}$/
+const never: GiveUp = () => new Promise(() => undefined)
 
 export function parseConfig(data: unknown): string | null {
   if (!isRecord(data)) return null
@@ -56,13 +59,14 @@ export function parseTokenPoll(data: unknown): TokenPoll {
 
 export function parseSession(data: unknown): Session | null {
   if (!isRecord(data)) return null
-  const session = str(data.session)
-  const login = str(data.login)
+  const session = typeof data.session === 'string' && SESSION.test(data.session) ? data.session : null
+  const name = login(data.login)
 
-  return session && login ? { session, login } : null
+  return session && name ? { session, login: name } : null
 }
 
-export async function requestDeviceCode(fetch: Fetch, clientId: string): Promise<DeviceCode | null> {
+export async function requestDeviceCode(fetch: Fetch, clientId: string, giveUp: GiveUp = never): Promise<DeviceCode | null> {
+  fetch = withGiveUp(fetch, giveUp)
   try {
     const body = new URLSearchParams({ client_id: clientId, scope: '' }).toString()
     const res = await fetch(DEVICE_URL, { method: 'POST', headers: FORM, body })
@@ -73,8 +77,9 @@ export async function requestDeviceCode(fetch: Fetch, clientId: string): Promise
   }
 }
 
-// A dropped request counts as pending so the next tick asks again.
-export async function pollToken(fetch: Fetch, clientId: string, deviceCode: string): Promise<TokenPoll> {
+// A dropped or timed-out request counts as pending so the next tick asks again.
+export async function pollToken(fetch: Fetch, clientId: string, deviceCode: string, giveUp: GiveUp = never): Promise<TokenPoll> {
+  fetch = withGiveUp(fetch, giveUp)
   try {
     const body = new URLSearchParams({
       client_id: clientId,
