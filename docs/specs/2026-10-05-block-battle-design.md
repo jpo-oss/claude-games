@@ -97,7 +97,7 @@ Node (current LTS) and TypeScript. One process.
 
 - Matchmaking queue and live rooms are in memory. A restart drops matches in progress, which is acceptable because matches last a few minutes.
 - Players, sessions, scores and wins live in one SQLite file.
-- The game logic in the internal server (`logic.ts`: score validation, queue, room sync, attack rate caps) is already pure and ports over. The Cloudflare Durable Object wiring gets replaced with plain HTTP handlers.
+- The game logic in the internal server (`logic.ts`: score validation, queue, room sync, attack rate caps) is already pure and ports over. Its platform-specific wiring gets replaced with plain HTTP handlers.
 
 ### Endpoints
 
