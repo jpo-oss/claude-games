@@ -1,6 +1,6 @@
 # Block Battle and claude-games: design
 
-Status: draft, 2026-10-05
+Status: draft, updated 2026-10-06 after a security review
 
 ## Goal
 
@@ -17,10 +17,12 @@ Block Battle is a port of an internal game we already run (jpo-tetris, built for
 | License | MIT for both |
 | First game | Block Battle, plugin name `block-battle`, command `/cg-block-battle` |
 | Commands | Every game's slash command starts with `cg-` |
-| Identity | GitHub device sign-in with no scopes |
+| Identity | GitHub device sign-in with no scopes, one OAuth app per server |
 | Official server | One small Hetzner VPS |
 | Self-hosting | Supported. Players pick a server in plugin settings |
-| Transport | HTTP polling. Mods can't open WebSockets |
+| Transport | HTTP. The server holds sync requests open until there's news. Mods can't open WebSockets |
+| Scores | Verified: the server replays every game before it counts |
+| Releases | Players get pinned releases, not whatever is on `main` |
 
 The word "Tetris" stays out of names, code, docs and visuals. The Tetris Company enforces its trademark and trade dress, and a takedown would also remove the marketplace.
 
@@ -78,13 +80,16 @@ Everything the internal version has stays:
 
 What changes:
 
-- **Sign-in.** GitHub device flow, run entirely through `$.http.fetch`. The pane shows the code and `github.com/login/device`; the hooks module polls for the token. The OAuth app requests no scopes, so the token can only read the public profile. One OAuth app (owned by jpo-oss) serves every server, since servers only use the token to ask GitHub who the player is. Device flow needs only the client ID, no secret ([GitHub docs](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)).
-- **Server choice.** `userConfig.serverUrl`, defaulting to the official server. Each server has its own leaderboard.
+- **Sign-in.** GitHub device flow, run entirely through `$.http.fetch`. The pane shows the code and `github.com/login/device`; the hooks module polls for the token. The OAuth app requests no scopes, so the token can only read the public profile. Device flow needs only the client ID, no secret ([GitHub docs](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)).
+- **One OAuth app per server.** The game asks the chosen server for its client ID (`GET /v1/config`) and signs in against that app. If every server shared one app, a rogue server could replay a player's token at another server and sign in as them. With one app each, a server only accepts tokens issued to its own app (see Sign-in below). The official server uses the jpo-oss app; self-hosters register their own.
+- **Server choice.** `userConfig.serverUrl`, defaulting to the official server. Each server has its own leaderboard. Only `https://` is accepted, plus `http://localhost` for development.
+- **Distrust the server.** Everything a server sends is validated before use: attacks are whole numbers from 1 to 40, at most 60 pending; logins match GitHub's format (`^[A-Za-z0-9-]{1,39}$`); board snapshots are at most 400 characters from the piece alphabet; error text has control characters stripped and is capped at 120 characters and shown as the server's words, never as instructions. A request that takes longer than 30 s is abandoned. Room IDs are URL-encoded. A result the game doesn't recognise counts as no result, never as a win.
+- **Sign out.** `/cg-block-battle signout` deletes the stored session and asks the server to revoke it.
 - **Offline.** Marathon works without a server. Battle and leaderboard show that the server is unreachable.
 - **Version check.** Every request sends the protocol version. The server answers 426 if it's too old, and the game tells the player to run `/plugin update`.
-- **Removed.** The justpressone org check, the jpoapps.com default, the `gh` CLI dependency, and the nexus/jpo naming.
+- **Removed.** The justpressone org check, the tetris.jpoapps.com server, the `gh` CLI dependency, and the nexus/jpo naming. The new default is `games.jpoapps.com`. JustPressOne must keep that domain registered: whoever owns it receives every default player's sign-in.
 
-Battle sync stays at 200 ms for now. On a flat-price box this is a capacity question, so we tune it after a load test.
+Battle sync uses held requests. The game sends its state and the server answers as soon as there's news for it (incoming garbage, the opponent's board changed, a result) or after 2 s of quiet. The game sends the next request straight away. That gives close to live-connection latency with far fewer requests than polling every 200 ms. Whether a held request survives inside a mod is unverified; the first server milestone tests it, and the 200 ms polling the game does today is the fallback.
 
 ## claude-games-server repo
 
@@ -100,24 +105,47 @@ All under `/v1`, JSON, `Authorization: Bearer <session>` except sign-in.
 
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/v1/config` | This server's GitHub OAuth client ID and supported protocol versions |
 | POST | `/v1/session` | Exchange a GitHub token for a session key |
+| DELETE | `/v1/session` | Sign out: revoke the session key |
+| POST | `/v1/marathon` | Start a Marathon game: returns a game ID and the piece seed |
 | GET | `/v1/leaderboard` | Top 5 scores, top 5 wins |
-| POST | `/v1/scores` | Submit a Marathon result |
+| POST | `/v1/scores` | Submit a Marathon game's input log for replay |
 | POST, DELETE | `/v1/battle/queue` | Join or leave matchmaking |
 | POST | `/v1/battle/:room/sync` | Send attacks and board snapshot, get opponent state and incoming garbage |
 | GET | `/health` | Uptime checks |
 
-`POST /v1/session` calls `GET https://api.github.com/user` with the token, stores the login and avatar, and returns a random session key. The server never stores the GitHub token.
+### Sign-in
+
+`POST /v1/session` first checks the token with `POST https://api.github.com/applications/{client_id}/token`, authenticated with this server's client ID and secret. GitHub answers 404 for a token issued to any other app, so a token captured by another server is useless here. Then it reads the login with `GET /user`, stores the login and avatar, and returns a session key.
+
+- Session keys are 32 random bytes, stored hashed, expire after 30 days without use, and can be revoked.
+- The server never stores or logs the GitHub token, and never logs request bodies on `/v1/session`.
+- Every route except `/health`, `/v1/config` and `POST /v1/session` requires a valid session.
 
 ### Refereeing
 
-Same model as the internal server. The server picks the shared piece seed, relays attacks between players, caps attack rate (burst 15, 2.5 lines/s), and decides the winner on top-out or a 10 s forfeit. Clients send attacks, not raw inputs. This stops lazy cheating, not a determined one, and that's fine for a casual game.
+The server picks the shared piece seed, relays attacks between players, caps attack rate (burst 15, 2.5 lines/s), and decides the winner on top-out or a 10 s forfeit.
+
+### Verified scores
+
+The engine is deterministic: the same seed and the same inputs at the same times always give the same game. The server uses that to check every result before it counts.
+
+- **Marathon.** The game asks `POST /v1/marathon` for a game ID and seed, so a player can't hunt for a lucky seed. It records every input with its game time (time played, so pauses don't count). At game over it sends the log to `POST /v1/scores`. The server replays the log with the engine and records the score the replay produces, not the score the client claims. A log longer than the time since the game started, or over a size cap, is rejected.
+- **Battle.** Each client records its inputs and the moment it applied each garbage batch, by the server's batch ID. At the end both send their logs. The server replays both boards with the shared seed and the garbage it actually sent. A win counts only if the loser's replay tops out, and the attacks each player sent match what their replay produces.
+- **Win farming.** Matches under 60 s don't count. Wins against the same opponent count once per day. GitHub accounts younger than 30 days can play but don't appear on the leaderboard.
+- **Engine sharing.** The server needs the exact engine the game runs. The games repo owns `engine.ts`; the server repo keeps a copy and its CI fails if the copy differs from the game's released version. A game release that changes the rules needs a protocol version bump, so old clients get 426 instead of failed replays.
+
+This stops fabricated scores and fake wins. It doesn't stop a bot that plays well; nothing short of watching the player does.
 
 ### Abuse limits
 
 - Per-session and per-IP request rate limits.
 - Request body size cap, and schema validation on every body.
 - A max concurrent player count. Past it, new queue joins get `503` and the game shows "server busy".
+- One held request per session, a global cap on held requests, and a 25 s hard limit on any hold (Cloudflare's proxy drops requests at 100 s).
+- One queue entry per login.
+- Request bodies capped at 4 KB, except score logs (capped by game length).
 - Leaderboard names are GitHub logins, so there's nothing to filter.
 
 ### Protocol sharing
@@ -130,8 +158,9 @@ Official server: one Hetzner VPS, behind Cloudflare's free proxy for TLS at the 
 
 - Docker image published to GHCR on each server release.
 - `docker compose` file with the server and Caddy (automatic HTTPS). Self-hosters use the same file.
-- Release workflow deploys to the box over SSH. The key lives in GitHub Actions secrets.
-- Daily copy of the SQLite file off the box.
+- Release workflow deploys to the box over SSH, only from tags, through a GitHub environment that needs approval. The key lives in that environment's secrets.
+- Cloudflare to the box uses full (strict) TLS, not flexible.
+- Daily encrypted copy of the SQLite file off the box. Restores get tested.
 - Logs keep GitHub logins and nothing else personal.
 
 ## Open source setup
@@ -146,6 +175,10 @@ Both repos:
 - GitHub Actions on every PR: lint, typecheck, tests. Games repo also runs `claude plugin validate` and `claude plugin test`. Server repo also builds the image.
 - Dependabot weekly. Secret scanning with push protection.
 - Branch protection on `main`: PR required, checks must pass, no force push.
+- Required review: one approval from a code owner on any change. Repo admins can bypass while there is a single maintainer; the bypass is removed when a second maintainer joins.
+- Pinned releases. The marketplace entry points at a git tag and commit, not at `main`. Merging to `main` ships nothing; a release is a separate PR that moves the pin. A mod runs with each player's full permissions, so this is the gate that matters most.
+- Actions pinned by commit SHA (Dependabot keeps them current). Default workflow token is read-only.
+- The jpo-oss org requires 2FA and has at most two owners.
 
 ## Testing
 
@@ -162,7 +195,8 @@ Friend rooms by code, sound, more games, desktop `Svg` rendering, signed commits
 
 - Create both repos in the `jpo-oss` org.
 - Rent the Hetzner box and pick a domain, proxied through Cloudflare.
-- Register the GitHub OAuth app with device flow enabled.
+- Register the GitHub OAuth app with device flow enabled. The server needs its client secret too.
+- Keep jpoapps.com registered.
 
 ## Risks
 
