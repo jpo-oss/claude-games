@@ -342,7 +342,13 @@ test('battle: a 410 on sync clears the battle, stops syncing and sends no queue 
 const DEVICE = { device_code: 'dc', user_code: 'WDJB-MJHT', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 }
 const EMPTY_LEADERBOARD = { marathon: [], wins: [] }
 
-function github(on: On, polls: unknown[], server: (req: Seen) => { status: number; body: unknown }, saved: Record<string, unknown> = {}) {
+function github(
+  on: On,
+  polls: unknown[],
+  server: (req: Seen) => { status: number; body: unknown },
+  saved: Record<string, unknown> = {},
+  config: unknown = { githubClientId: 'Iv1.test' },
+) {
   const queue = [...polls]
   const seen: Seen[] = []
   const saves = store(on, saved)
@@ -351,6 +357,7 @@ function github(on: On, polls: unknown[], server: (req: Seen) => { status: numbe
     seen.push(req)
     if (e.url === 'https://github.com/login/device/code') return { value: reply(DEVICE) }
     if (e.url === 'https://github.com/login/oauth/access_token') return { value: reply(queue.shift() ?? { error: 'authorization_pending' }) }
+    if (new URL(e.url).pathname === '/v1/config') return { value: reply(config) }
     const out = server({ ...req, url: new URL(e.url).pathname, body: e.init?.body ? JSON.parse(e.init.body) : undefined })
 
     return { value: reply(out.body, out.status) }
@@ -380,13 +387,15 @@ test('choosing Leaderboard while signed out shows the GitHub code, then signs in
   await clock.advance(5_000)
   await ui.advance(48)
 
+  const device = seen.find(r => r.url === 'https://github.com/login/device/code')!
+  expect(new URLSearchParams(device.body as string).get('client_id')).toBe('Iv1.test')
   const session = seen.find(r => r.url.endsWith('/v1/session'))!
   expect(session.auth).toBe('')
   expect(saves.get('session:https://games.jpoapps.com')).toEqual({ session: 'sess_9', login: 'carol' })
   expect(JSON.stringify([...saves])).not.toContain('gho_secret')
   expect(await shown(ui)).toContain('Marathon top 5')
   expect(await shown(ui)).not.toContain('gho_secret')
-  expect(seen.filter(r => r.url.includes('/v1/') && !r.url.endsWith('/v1/session')).every(r => r.auth === 'Bearer sess_9')).toBe(true)
+  expect(seen.filter(r => r.url.includes('/v1/') && !r.url.endsWith('/v1/session') && !r.url.endsWith('/v1/config')).every(r => r.auth === 'Bearer sess_9')).toBe(true)
 })
 
 test('a denied code says so and can be retried', async ($: Engine, on: On) => {
@@ -402,7 +411,8 @@ test('a denied code says so and can be retried', async ($: Engine, on: On) => {
 test('GitHub being down leaves solo play alone', async ($: Engine, on: On) => {
   mock.clock(on)
   store(on)
-  on('http.fetch', async () => {
+  on('http.fetch', async (_$, e) => {
+    if (e.url.endsWith('/v1/config')) return { value: reply({ githubClientId: 'Iv1.test' }) }
     throw new Error('offline')
   })
   const ui = await $.ui.mount(target('terminal'))
@@ -523,4 +533,13 @@ test('a battle the player really won shows a win', async ($: Engine, on: On) => 
   await ui.advance(48)
   for (let i = 0; i < 6; i++) await ui.advance(200)
   expect(await shown(ui)).toContain('YOU WIN')
+})
+
+test('a server with no sign-in app says so', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const { seen } = github(on, [], () => ({ status: 200, body: EMPTY_LEADERBOARD }), {}, {})
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  expect(await shown(ui)).toContain("isn't set up for sign-in")
+  expect(seen.some(r => r.url.startsWith('https://github.com/'))).toBe(false)
 })

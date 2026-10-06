@@ -1,8 +1,5 @@
 import type { Fetch } from './net'
 
-// Registered under the jpo-oss org with device flow on and no scopes. Client IDs are public.
-export const GITHUB_CLIENT_ID = ''
-
 const DEVICE_URL = 'https://github.com/login/device/code'
 const TOKEN_URL = 'https://github.com/login/oauth/access_token'
 const FORM = { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -17,6 +14,15 @@ export type Session = { session: string; login: string }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null)
+
+const CLIENT_ID = /^[A-Za-z0-9._-]{1,64}$/
+
+export function parseConfig(data: unknown): string | null {
+  if (!isRecord(data)) return null
+  const id = data.githubClientId
+
+  return typeof id === 'string' && CLIENT_ID.test(id) ? id : null
+}
 
 export const sessionKey = (base: string) => 'session:' + base.replace(/\/+$/, '')
 
@@ -56,9 +62,9 @@ export function parseSession(data: unknown): Session | null {
   return session && login ? { session, login } : null
 }
 
-export async function requestDeviceCode(fetch: Fetch): Promise<DeviceCode | null> {
+export async function requestDeviceCode(fetch: Fetch, clientId: string): Promise<DeviceCode | null> {
   try {
-    const body = new URLSearchParams({ client_id: GITHUB_CLIENT_ID, scope: '' }).toString()
+    const body = new URLSearchParams({ client_id: clientId, scope: '' }).toString()
     const res = await fetch(DEVICE_URL, { method: 'POST', headers: FORM, body })
 
     return parseDeviceCode(JSON.parse(res.text))
@@ -68,10 +74,10 @@ export async function requestDeviceCode(fetch: Fetch): Promise<DeviceCode | null
 }
 
 // A dropped request counts as pending so the next tick asks again.
-export async function pollToken(fetch: Fetch, deviceCode: string): Promise<TokenPoll> {
+export async function pollToken(fetch: Fetch, clientId: string, deviceCode: string): Promise<TokenPoll> {
   try {
     const body = new URLSearchParams({
-      client_id: GITHUB_CLIENT_ID,
+      client_id: clientId,
       device_code: deviceCode,
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
     }).toString()

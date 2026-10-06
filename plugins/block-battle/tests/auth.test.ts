@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { parseDeviceCode, parseSession, parseTokenPoll, pollToken, requestDeviceCode, sessionKey } from '../hooks/auth'
+import { parseConfig, parseDeviceCode, parseSession, parseTokenPoll, pollToken, requestDeviceCode, sessionKey } from '../hooks/auth'
 import type { Fetch } from '../hooks/net'
 
 const reply = (body: unknown, status = 200) => ({ status, ok: status < 300, headers: {}, text: JSON.stringify(body) })
@@ -37,9 +37,10 @@ test('the device code request asks for no scopes', async () => {
     seen.push({ url, body: init?.body })
     return reply({ device_code: 'dc', user_code: 'U', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 })
   }
-  await requestDeviceCode(fetch)
+  await requestDeviceCode(fetch, 'Iv1.abc')
   expect(seen[0]!.url).toBe('https://github.com/login/device/code')
   expect(new URLSearchParams(seen[0]!.body).get('scope')).toBe('')
+  expect(new URLSearchParams(seen[0]!.body).get('client_id')).toBe('Iv1.abc')
 })
 
 test('polling sends the device grant and treats a network error as pending', async () => {
@@ -48,15 +49,24 @@ test('polling sends the device grant and treats a network error as pending', asy
     body = init?.body ?? ''
     return reply({ error: 'authorization_pending' })
   }
-  expect(await pollToken(ok, 'dc')).toEqual({ kind: 'pending' })
+  expect(await pollToken(ok, 'Iv1.abc', 'dc')).toEqual({ kind: 'pending' })
   expect(new URLSearchParams(body).get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:device_code')
+  expect(new URLSearchParams(body).get('client_id')).toBe('Iv1.abc')
   const down: Fetch = async () => {
     throw new Error('offline')
   }
-  expect(await pollToken(down, 'dc')).toEqual({ kind: 'pending' })
+  expect(await pollToken(down, 'Iv1.abc', 'dc')).toEqual({ kind: 'pending' })
 })
 
 test('sessions are stored per server', () => {
   expect(sessionKey('https://a.example/')).toBe('session:https://a.example')
   expect(sessionKey('https://a.example')).not.toBe(sessionKey('https://b.example'))
+})
+
+test('the server config must name a well-formed client ID', () => {
+  expect(parseConfig({ githubClientId: 'Iv1.abc' })).toBe('Iv1.abc')
+  expect(parseConfig({})).toBeNull()
+  expect(parseConfig({ githubClientId: 'a b' })).toBeNull()
+  expect(parseConfig({ githubClientId: 'x'.repeat(65) })).toBeNull()
+  expect(parseConfig('nope')).toBeNull()
 })

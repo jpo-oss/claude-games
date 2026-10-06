@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, HttpInit, Register, Timer } from 'claude-code'
 
 import type { Battle, ClientMsg, GameView } from '../types'
-import { parseSession, pollToken, requestDeviceCode, sessionKey } from './auth'
+import { parseConfig, parseSession, pollToken, requestDeviceCode, sessionKey } from './auth'
 import type { Session } from './auth'
 import { OPP_COLUMNS, TIERS } from './draw'
 import {
@@ -34,6 +34,7 @@ const DOWN = 'Game server unreachable. Solo play still works.'
 const SIGNED_OUT = 'Signed out. Pick Battle or Leaderboard to sign in again.'
 const OUTDATED = 'Block Battle is out of date. Run /plugin update block-battle@claude-games'
 const SIGNING_IN = 'Signing in with GitHub...'
+const NO_SIGNIN = "This server isn't set up for sign-in."
 const BAD_URL = 'The server address must start with https://. Change it in the plugin settings.'
 const TIMEOUT_MS = 30_000
 const NO_GITHUB = "Couldn't reach GitHub to sign in. Solo play still works."
@@ -118,8 +119,14 @@ async function startSignIn($: EngineInterface) {
     return setView($, { notice })
   }
   const fetch = (url: string, init?: HttpInit) => $.http.fetch(url, init)
+  const giveUp = (signal: AbortSignal) => $.clock.sleep(TIMEOUT_MS, { signal })
   try {
-    const code = await requestDeviceCode(fetch)
+    const config = await call(fetch, rt.base, 'GET', '/v1/config', null, undefined, giveUp)
+    if (!live()) return
+    if (!config.ok) return end(noticeFor(config))
+    const clientId = parseConfig(config.data)
+    if (!clientId) return end(NO_SIGNIN)
+    const code = await requestDeviceCode(fetch, clientId)
     if (!live()) return
     if (!code) return end(NO_GITHUB)
     rt.signInLine = signInLine(code.uri, code.userCode)
@@ -130,7 +137,7 @@ async function startSignIn($: EngineInterface) {
       try {
         if (!live()) return
         if ((await $.clock.now()) - startedAt > code.expiresIn * 1000) return end(CANCELLED)
-        const poll = await pollToken(fetch, code.deviceCode)
+        const poll = await pollToken(fetch, clientId, code.deviceCode)
         if (!live()) return
         if (poll.kind === 'pending' || poll.kind === 'slowDown') {
           if (poll.kind === 'slowDown') interval += 5
