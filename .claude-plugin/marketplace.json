@@ -1,11 +1,22 @@
 {
   "name": "claude-games",
-  "owner": { "name": "JustPressOne Inc.", "email": "ansell@justpressone.com" },
-  "metadata": { "description": "Multiplayer games to play inside Claude Code while it works" },
+  "owner": {
+    "name": "JustPressOne Inc.",
+    "email": "ansell@justpressone.com"
+  },
+  "metadata": {
+    "description": "Multiplayer games to play inside Claude Code while it works"
+  },
   "plugins": [
     {
       "name": "block-battle",
-      "source": "./plugins/block-battle",
+      "source": {
+        "source": "git-subdir",
+        "url": "jpo-oss/claude-games",
+        "path": "plugins/block-battle",
+        "ref": "block-battle-v0.1.0",
+        "sha": "ad2ff385dd68d7d6b5265738058eff806e1cc5ec"
+      },
       "description": "Falling-block puzzle with solo Marathon, 1v1 battles and a leaderboard"
     }
   ]
