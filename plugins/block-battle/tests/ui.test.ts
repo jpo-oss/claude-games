@@ -15,6 +15,8 @@ const target = (surface: 'terminal' | 'desktop') =>
 
 type Ui = Mounted<'terminal' | 'desktop', 'Pane'>
 
+const run = (args: string) => ({ command: 'cg-block-battle', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 100 } })
+
 const shown = async (ui: Ui) => JSON.stringify(await ui.drawn({ in: 'game' }))
 
 for (const surface of ['terminal', 'desktop'] as const) {
@@ -78,8 +80,13 @@ function store(on: On, init: Record<string, unknown> = {}): Map<string, unknown>
 const SIGNED_IN = { 'session:https://games.jpoapps.com': { session: 'sess_1', login: 'alice' } }
 
 function serve(on: On, route: (req: Seen) => { status: number; body: unknown }, saved: Record<string, unknown> = SIGNED_IN): Seen[] {
-  const seen: Seen[] = []
   store(on, saved)
+
+  return serveOnly(on, route)
+}
+
+function serveOnly(on: On, route: (req: Seen) => { status: number; body: unknown }): Seen[] {
+  const seen: Seen[] = []
   on('http.fetch', async (_$, e) => {
     const { pathname } = new URL(e.url)
     const req: Seen = {
@@ -820,7 +827,7 @@ test('/cg-block-battle signout revokes the session and forgets it', async ($: En
   mock.clock(on)
   const { seen, saves } = github(on, [], () => ({ status: 204, body: {} }), SIGNED_IN)
   on('ui.open', async () => ({ value: { isPlaced: true } }))
-  const ran = await $.command.run({ command: 'cg-block-battle', args: 'signout' })
+  const ran = await $.command.run(run('signout'))
   expect(JSON.stringify(ran)).toContain('Signed out')
   expect(seen.find(r => r.url.endsWith('/v1/session'))).toMatchObject({ method: 'DELETE', auth: 'Bearer sess_1' })
   expect(saves.has('session:https://games.jpoapps.com')).toBe(false)
@@ -829,7 +836,7 @@ test('/cg-block-battle signout revokes the session and forgets it', async ($: En
 test('signing out with no session still answers', async ($: Engine, on: On) => {
   mock.clock(on)
   const { seen } = github(on, [], () => ({ status: 204, body: {} }))
-  const ran = await $.command.run({ command: 'cg-block-battle', args: 'signout' })
+  const ran = await $.command.run(run('signout'))
   expect(JSON.stringify(ran)).toContain('Not signed in')
   expect(seen).toHaveLength(0)
 })
@@ -1058,18 +1065,22 @@ test('a log goes to the server that started the game, with that server\'s sessio
   expect(scores[0]).toMatchObject({ url: 'https://games.jpoapps.com/v1/scores', auth: 'Bearer sess_1' })
 })
 
-function slowStore(on: On, init: Record<string, unknown>, slowKey: string) {
+// Holds the first get (or set) of one key until the test releases it.
+function slowStore(on: On, init: Record<string, unknown>, slowKey: string, op: 'get' | 'set' = 'get') {
   const m = new Map(Object.entries(init))
   let release = () => {}
   let isHeld = false
+  const hold = async (key: string) => {
+    if (key !== slowKey || isHeld) return
+    isHeld = true
+    await new Promise<void>(r => (release = r))
+  }
   on('store.get', async (_$, e) => {
-    if (e.key === slowKey && !isHeld) {
-      isHeld = true
-      await new Promise<void>(r => (release = r))
-    }
+    if (op === 'get') await hold(e.key)
     return { value: m.get(e.key) }
   })
   on('store.set', async (_$, e) => {
+    if (op === 'set') await hold(e.key)
     m.set(e.key, e.value)
     return { value: undefined }
   })
@@ -1079,7 +1090,7 @@ function slowStore(on: On, init: Record<string, unknown>, slowKey: string) {
   })
   on('store.keys', async () => ({ value: [...m.keys()] }))
 
-  return { m, release: () => release() }
+  return { m, release: () => release(), isHeld: () => isHeld }
 }
 
 test('a session still loading for one server is never sent to the server picked meanwhile', async ($: Engine, on: On) => {
@@ -1091,7 +1102,7 @@ test('a session still loading for one server is never sent to the server picked 
     return { value: reply(new URL(e.url).pathname === '/v1/leaderboard' ? EMPTY_LEADERBOARD : MATCH.body) }
   })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
-  await $.command.run({ command: 'cg-block-battle', args: '' })
+  await $.command.run(run(''))
   const ui = await $.ui.mount(target('terminal'))
   await openPicker(ui)
   await ui.key({ key: 'down' })
@@ -1145,6 +1156,7 @@ test('a match found on a server the player has left is not played on the new one
   for (let i = 0; i < 4; i++) await ui.advance(200)
   expect(seen.some(r => r.url.includes('/r1/'))).toBe(false)
   expect(await shown(ui)).not.toContain('bob')
+  expect(seen.filter(r => r.method === 'DELETE' && r.url === OFFICIAL_URL + '/v1/battle/queue')).toHaveLength(2)
 })
 
 test('a match that arrives after the player moved to another server does not replace the new search', async ($: Engine, on: On) => {
@@ -1160,7 +1172,7 @@ test('a match that arrives after the player moved to another server does not rep
     if (gate) await gate
     return { value: 0 }
   })
-  for (const wait of ['clock.sleep', 'clock.after', 'clock.every'] as const) on(wait, () => new Promise(() => undefined))
+  for (const wait of ['clock.sleep', 'clock.after', 'clock.every'] as const) on(wait, () => new Promise<never>(() => undefined))
   store(on, BOTH)
   const seen: Seen[] = []
   on('http.fetch', async (_$, e) => {
@@ -1193,27 +1205,12 @@ test('a match that arrives after the player moved to another server does not rep
   for (let i = 0; i < 4; i++) await ui.advance(200)
   expect(seen.some(r => r.url.includes('/r1/'))).toBe(false)
   expect(await shown(ui)).not.toContain('bob')
+  expect(seen.filter(r => r.method === 'DELETE' && r.url === OFFICIAL_URL + '/v1/battle/queue')).toHaveLength(2)
 })
 
 test('a sign-in cancelled by switching servers does not show its name on the new server', async ($: Engine, on: On) => {
   const clock = mock.clock(on)
-  const m = new Map<string, unknown>([['session:' + ACME, { session: 'acme_sess', login: 'dave' }]])
-  let release = () => {}
-  let isHeld = false
-  on('store.get', async (_$, e) => ({ value: m.get(e.key) }))
-  on('store.set', async (_$, e) => {
-    if (e.key === 'session:' + OFFICIAL_URL && !isHeld) {
-      isHeld = true
-      await new Promise<void>(r => (release = r))
-    }
-    m.set(e.key, e.value)
-    return { value: undefined }
-  })
-  on('store.delete', async (_$, e) => {
-    m.delete(e.key)
-    return { value: undefined }
-  })
-  on('store.keys', async () => ({ value: [...m.keys()] }))
+  const slow = slowStore(on, { ['session:' + ACME]: { session: 'acme_sess', login: 'dave' } }, 'session:' + OFFICIAL_URL, 'set')
   const polls = [{ access_token: 'gho_secret', scope: '' }]
   on('http.fetch', async (_$, e) => {
     if (e.url === 'https://github.com/login/device/code') return { value: reply(DEVICE) }
@@ -1228,7 +1225,7 @@ test('a sign-in cancelled by switching servers does not show its name on the new
   await openLeaderboard(ui)
   await clock.advance(5_000)
   await ui.advance(48)
-  expect(isHeld).toBe(true)
+  expect(slow.isHeld()).toBe(true)
   await ui.key({ key: 'q' })
   await ui.key({ key: 'up' })
   await ui.key({ key: 'return' })
@@ -1239,7 +1236,7 @@ test('a sign-in cancelled by switching servers does not show its name on the new
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
-  release()
+  slow.release()
   await ui.advance(48)
   await ui.key({ key: 'q' })
   await ui.advance(48)
@@ -1270,4 +1267,33 @@ test('a server still busy with the last match is asked again until the search gi
   expect(posts).toBeGreaterThanOrEqual(3)
   expect(seen.some(r => r.method === 'DELETE')).toBe(false)
   expect(await shown(ui)).not.toContain('already in a battle')
+})
+
+test('a search restarted while its first poll looks up the session still finds its match', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const slow = slowStore(on, SIGNED_IN, 'session:' + OFFICIAL_URL)
+  let posts = 0
+  const seen = serveOnly(on, req => {
+    if (req.url === '/v1/battle/queue' && req.method === 'POST')
+      return ++posts === 1 ? { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } } : { status: 409, body: { error: 'already in a battle' } }
+    if (req.url === '/v1/battle/queue') return { status: 204, body: {} }
+    return { status: 200, body: { opponent: OPPONENT, incoming: [] } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  expect(slow.isHeld()).toBe(true)
+  await ui.key({ key: 'q' })
+  await ui.advance(48)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  slow.release()
+  for (let i = 0; i < 3; i++) {
+    await ui.advance(48)
+    await clock.advance(1_500)
+  }
+  for (let i = 0; i < 4; i++) await ui.advance(200)
+  expect(seen.filter(r => r.method === 'POST' && r.url.endsWith('/v1/battle/queue'))).toHaveLength(1)
+  expect(await shown(ui)).toContain('bob')
 })

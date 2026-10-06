@@ -136,13 +136,13 @@ function noticeFor(r: { status: number; error: string }): string {
 }
 
 // The server can change while the store answers, so the session is only ever returned for the base it was read for.
+// The name shown follows the active server's session on every call, so a sign-in cut short by a close still shows it.
 async function loadSession($: EngineInterface, base = rt.base): Promise<Session | null> {
-  if (rt.session?.base === base) return rt.session.s
-  const s = parseSession(await $.store.get(sessionKey(base)))
-  if (s && base === rt.base) {
-    rt.session = { base, s }
-    await setView($, { me: s.login })
-  }
+  const loaded = rt.session?.base === base ? rt.session.s : parseSession(await $.store.get(sessionKey(base)))
+  if (loaded === null || base !== rt.base) return loaded
+  const s = rt.session?.base === base ? rt.session.s : loaded
+  rt.session = { base, s }
+  if ((await read($, view)).me !== s.login) await setView($, { me: s.login })
 
   return s
 }
@@ -258,9 +258,18 @@ async function startSignIn($: EngineInterface) {
 }
 
 // A server other than the active one is only called with its own stored session, never with a sign-in.
-async function api($: EngineInterface, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, base = rt.base): Promise<Reply<unknown>> {
+// isWanted is asked once the session is in hand, right before anything is sent.
+async function api(
+  $: EngineInterface,
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  body?: unknown,
+  base = rt.base,
+  isWanted = () => true,
+): Promise<Reply<unknown>> {
   if (!serverUrlOk(base)) return { ok: false, status: -2, error: BAD_URL }
   const s = await loadSession($, base)
+  if (!isWanted()) return { ok: false, status: -3, error: '' }
   if (s === null) {
     if (base !== rt.base) return { ok: false, status: -1, error: SIGNED_OUT }
     void startSignIn($)
@@ -331,16 +340,13 @@ async function pollQueue($: EngineInterface, startedAt: number) {
 
       return
     }
-    const r = await api($, 'POST', '/v1/battle/queue', undefined, base)
-    if (base !== rt.base) {
-      if (r.ok) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
-
-      return
-    }
-    if (!current()) return
-    // The server says 409 while it still holds the last match; that clears on its own.
-    if (r.status === 409) return
+    const r = await api($, 'POST', '/v1/battle/queue', undefined, base, current)
+    // A reply from a search that has since been replaced on this server still counts; one the player has left is cancelled there.
+    const isSearching = () => base === rt.base && rt.queueTimer !== null
+    const cancel = () => api($, 'DELETE', '/v1/battle/queue', undefined, base)
     if (!r.ok) {
+      // The server says 409 while it still holds the last match; that clears on its own.
+      if (r.status === -3 || r.status === 409 || !current()) return
       stopQueue()
       if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue')
       await setBattle($, idleBattle())
@@ -349,9 +355,18 @@ async function pollQueue($: EngineInterface, startedAt: number) {
       return
     }
     const q = parseQueue(r.data)
+    if (!isSearching()) {
+      await cancel()
+
+      return
+    }
     if (q?.status === 'matched') {
       const now = await $.clock.now()
-      if (!current()) return
+      if (!isSearching()) {
+        await cancel()
+
+        return
+      }
       stopQueue()
       rt.opponentLogin = q.opponent
       rt.rooms = [...rt.rooms, { key: q.roomId, base }].slice(-8)
