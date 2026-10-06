@@ -18,7 +18,7 @@ Block Battle is a port of an internal game we already run (jpo-tetris, built for
 | First game | Block Battle, plugin name `block-battle`, command `/cg-block-battle` |
 | Commands | Every game's slash command starts with `cg-` |
 | Identity | GitHub device sign-in with no scopes, one OAuth app per server |
-| Official server | One small Hetzner VPS |
+| Official server | Run by the maintainers from the public server code. Its hosting details aren't part of this repo |
 | Self-hosting | Supported. Players pick a server in plugin settings |
 | Transport | HTTP. The server holds sync requests open until there's news. Mods can't open WebSockets |
 | Scores | Verified: the server replays every game before it counts |
@@ -143,7 +143,7 @@ This stops fabricated scores and fake wins. It doesn't stop a bot that plays wel
 - Per-session and per-IP request rate limits.
 - Request body size cap, and schema validation on every body.
 - A max concurrent player count. Past it, new queue joins get `503` and the game shows "server busy".
-- One held request per session, a global cap on held requests, and a 25 s hard limit on any hold (Cloudflare's proxy drops requests at 100 s).
+- One held request per session, a global cap on held requests, and a 25 s hard limit on any hold, well under the 100 s many proxies allow.
 - One queue entry per login.
 - Request bodies capped at 4 KB, except score logs (capped by game length).
 - Leaderboard names are GitHub logins, so there's nothing to filter.
@@ -154,14 +154,14 @@ The server repo owns `protocol.ts`. The games repo keeps a copy in each game. CI
 
 ## Hosting
 
-Official server: one Hetzner VPS, behind Cloudflare's free proxy for TLS at the edge and junk traffic.
+The server repo ships everything needed to run a server: a container image published on each release and a `docker compose` file with the server and Caddy (automatic HTTPS). The official server and every self-hosted one use the same files. How the maintainers host the official server isn't documented here.
 
-- Docker image published to GHCR on each server release.
-- `docker compose` file with the server and Caddy (automatic HTTPS). Self-hosters use the same file.
-- Release workflow deploys to the box over SSH, only from tags, through a GitHub environment that needs approval. The key lives in that environment's secrets.
-- Cloudflare to the box uses full (strict) TLS, not flexible.
-- Daily encrypted copy of the SQLite file off the box. Restores get tested.
-- Logs keep GitHub logins and nothing else personal.
+Any host running it should:
+
+- Put a proxy or firewall in front if it can, and use encrypted connections end to end.
+- Deploy only from tagged releases.
+- Keep a daily encrypted copy of the SQLite file off the machine, and test restores.
+- Log GitHub logins and nothing else personal.
 
 ## Open source setup
 
@@ -194,12 +194,11 @@ Friend rooms by code, sound, more games, desktop `Svg` rendering, signed commits
 ## Owner tasks
 
 - Create both repos in the `jpo-oss` org.
-- Rent the Hetzner box and pick a domain, proxied through Cloudflare.
 - Register the GitHub OAuth app with device flow enabled. The server needs its client secret too.
 - Keep jpoapps.com registered.
 
 ## Risks
 
 - "claude" in the repo names may conflict with Anthropic's brand guidelines. Not checked.
-- Hetzner pricing and box capacity are estimates until the load test.
+- Server capacity is an estimate until the load test.
 - Mods are new. API changes in Claude Code could break the game, so CI should run against the latest release.
