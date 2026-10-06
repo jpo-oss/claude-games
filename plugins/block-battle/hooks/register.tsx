@@ -88,6 +88,7 @@ const rt: {
   asm: Assembly | null
   sentKeys: string[]
   wantsSync: boolean
+  retry: Timer | null
 } = {
   base: OFFICIAL,
   home: OFFICIAL,
@@ -113,6 +114,7 @@ const rt: {
   asm: null,
   sentKeys: [],
   wantsSync: false,
+  retry: null,
 }
 
 const setView = ($: EngineInterface, patch: Partial<GameView>) => update($, view, v => ({ ...v, ...patch }))
@@ -287,6 +289,8 @@ function stopQueue() {
 async function resetBattle($: EngineInterface, isLeaving: boolean) {
   const wasQueueing = rt.queueTimer !== null
   stopQueue()
+  rt.retry?.cancel()
+  rt.retry = null
   rt.outbox = emptyOutbox()
   rt.latest = { snapshot: '', isOver: false }
   rt.opponentLogin = ''
@@ -350,21 +354,31 @@ async function flushSync($: EngineInterface) {
   if (battle.roomId === null || battle.status !== 'matched') return
   rt.isSyncing = true
   try {
+    const again = (ms: number) => {
+      rt.retry?.cancel()
+      rt.retry = $.clock.after(ms, () => void flushSync($))
+    }
+    // After topping out the Client stops posting syncs, so the hooks keep asking until the result comes or the server has been silent too long.
+    const stalled = async () => {
+      if (!rt.latest.isOver) return
+      if ((await $.clock.now()) - rt.lastSyncOk >= TIMEOUT_MS) await endMatch($, DOWN)
+      else again(1_000)
+    }
     const { seq, attacks } = nextPayload(rt.outbox)
     const r = await api($, 'POST', `/v1/battle/${encodeURIComponent(battle.roomId)}/sync`, { seq, attacks, snapshot: rt.latest.snapshot, isOver: rt.latest.isOver })
     if (!r.ok) {
       if (r.status === 404 || r.status === 403) await endMatch($, 'The match is no longer available.')
       else if (r.status === 401) await endMatch($, fail(r))
-      else if (r.status === 0 && (await $.clock.now()) - rt.lastSyncOk >= TIMEOUT_MS) await endMatch($, DOWN)
-      else if (r.status === 0 && rt.latest.isOver) $.clock.after(1_000, () => void flushSync($))
+      else if (r.status === 0 && !rt.latest.isOver && (await $.clock.now()) - rt.lastSyncOk >= TIMEOUT_MS) await endMatch($, DOWN)
+      else await stalled()
 
       return
     }
     rt.outbox.inflight = null
-    rt.lastSyncOk = await $.clock.now()
     const s = parseSync(r.data)
-    if (!s) return
-    if (!s.ended && rt.latest.isOver) rt.wantsSync = true
+    if (!s) return stalled()
+    rt.lastSyncOk = await $.clock.now()
+    if (!s.ended && rt.latest.isOver) again(250)
     if (s.ended && (s.winner === null || resultFor(s.winner, (await read($, view)).me) === null)) return endMatch($, 'The match ended with no result.')
     await update($, view, v => ({
       ...v,

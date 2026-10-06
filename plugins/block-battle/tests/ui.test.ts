@@ -842,3 +842,25 @@ test('the leaderboard names the server it comes from', async ($: Engine, on: On)
   await openLeaderboard(ui)
   expect(await shown(ui)).toContain('games.jpoapps.com')
 })
+
+test('a topped-out player whose syncs keep failing is taken out of the match', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const seen = serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    return { status: 500, body: { error: 'boom' } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.post({ type: 'sync', seq: 1, attacks: [], snapshot: EMPTY_BOARD, isOver: true })
+  await clock.advance(32_000)
+  await ui.advance(48)
+  const syncs = () => seen.filter(r => r.url.endsWith('/sync')).length
+  const after = syncs()
+  expect(after).toBeGreaterThan(1)
+  expect(await shown(ui)).toContain('Game server unreachable')
+  await clock.advance(10_000)
+  expect(syncs()).toBe(after)
+})
