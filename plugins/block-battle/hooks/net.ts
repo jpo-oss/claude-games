@@ -50,25 +50,31 @@ export async function call(
     if (res.ok) return { ok: true, data }
     const error = (data as { error?: unknown } | null)?.error
 
-    return { ok: false, status: res.status, error: typeof error === 'string' ? error : `HTTP ${res.status}` }
+    return { ok: false, status: res.status, error: typeof error === 'string' ? cleanText(error) : `HTTP ${res.status}` }
   } catch {
     return { ok: false, status: 0, error: 'unreachable' }
   }
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
+const LOGIN = /^[A-Za-z0-9-]{1,39}$/
+const ROOM = /^[A-Za-z0-9_-]{1,64}$/
+const SNAPSHOT = /^[.IOTSZJLG]{0,400}$/
+const login = (v: unknown): string | null => (typeof v === 'string' && LOGIN.test(v) ? v : null)
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+const count = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
+export const cleanText = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, 120)
 
 export function parseLeaderboard(data: unknown): Leaderboard | null {
   if (!isRecord(data) || !Array.isArray(data.marathon) || !Array.isArray(data.wins)) return null
-  const marathon = data.marathon.filter(isRecord).map(r => ({
-    login: String(r.login ?? '?'),
-    score: num(r.score),
-    lines: num(r.lines),
-    level: num(r.level),
-    at: num(r.at),
-  }))
-  const wins = data.wins.filter(isRecord).map(r => ({ login: String(r.login ?? '?'), wins: num(r.wins) }))
+  const marathon = data.marathon
+    .filter(isRecord)
+    .filter(r => login(r.login) && count(r.score) && count(r.lines) && count(r.level) && count(r.at))
+    .map(r => ({ login: r.login as string, score: r.score as number, lines: r.lines as number, level: r.level as number, at: r.at as number }))
+  const wins = data.wins
+    .filter(isRecord)
+    .filter(r => login(r.login) && count(r.wins))
+    .map(r => ({ login: r.login as string, wins: r.wins as number }))
 
   return { marathon: marathon.slice(0, 5), wins: wins.slice(0, 5) }
 }
@@ -80,10 +86,9 @@ export type QueueReply =
 export function parseQueue(data: unknown): QueueReply | null {
   if (!isRecord(data)) return null
   if (data.status === 'waiting') return { status: 'waiting' }
-  if (data.status === 'matched' && typeof data.roomId === 'string' && typeof data.seed === 'number') {
-    const opp = isRecord(data.opponent) ? String(data.opponent.login ?? '?') : '?'
-
-    return { status: 'matched', roomId: data.roomId, seed: data.seed, opponent: opp }
+  if (data.status === 'matched' && typeof data.roomId === 'string' && ROOM.test(data.roomId) && count(data.seed)) {
+    const opp = isRecord(data.opponent) ? login(data.opponent.login) : null
+    if (opp) return { status: 'matched', roomId: data.roomId, seed: data.seed, opponent: opp }
   }
 
   return null
@@ -93,16 +98,18 @@ export type SyncReply = { opponent: Opponent | null; incoming: Incoming[]; winne
 
 export function parseSync(data: unknown): SyncReply | null {
   if (!isRecord(data)) return null
-  const opp = isRecord(data.opponent)
-    ? { login: String(data.opponent.login ?? '?'), snapshot: String(data.opponent.snapshot ?? ''), isOver: data.opponent.isOver === true }
-    : null
+  const o = isRecord(data.opponent) ? data.opponent : null
+  const snapshot = typeof o?.snapshot === 'string' ? o.snapshot : ''
+  const name = login(o?.login)
+  const opp = o && name && SNAPSHOT.test(snapshot) ? { login: name, snapshot, isOver: o.isOver === true } : null
   const incoming = Array.isArray(data.incoming)
     ? data.incoming
+        .slice(0, MAX_INCOMING)
         .filter(isRecord)
-        .filter(a => typeof a.id === 'number' && typeof a.lines === 'number' && a.lines > 0)
+        .filter(a => count(a.id) && Number.isInteger(a.lines) && (a.lines as number) >= 1 && (a.lines as number) <= 40)
         .map(a => ({ id: a.id as number, lines: a.lines as number }))
     : []
-  const winner = isRecord(data.result) && typeof data.result.winner === 'string' ? data.result.winner : null
+  const winner = isRecord(data.result) ? login(data.result.winner) : null
 
   return { opponent: opp, incoming, winner }
 }
