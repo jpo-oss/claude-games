@@ -38,9 +38,11 @@ async function labelled(ui: Ui, word: string): Promise<string> {
 // The first number-only Text of the side panel is the score value.
 const score = async (ui: Ui) => Number((await ui.find({ type: 'Text', text: /^\d+$/, in: 'game' }))?.text ?? NaN)
 
-test('a hard drop changes the field and scores', async ($: Engine) => {
+test('a hard drop changes the field and scores', async ($: Engine, on: On) => {
+  store(on)
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'return' })
+  await ui.advance(100)
   await ui.advance(32)
   const before = await shown(ui)
   expect(await score(ui)).toBe(0)
@@ -254,21 +256,145 @@ test('long-turn nudge: waits while a question dialog is up', async ($: Engine, o
   expect(toasts).toEqual(['Long task. /cg-block-battle while you wait?'])
 })
 
-test('marathon game over posts the score once and shows the fill and the label', async ($: Engine, on: On) => {
-  mock.clock(on)
-  const seen = serve(on, () => ({ status: 200, body: { marathon: [], wins: [] } }))
-  const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'return' })
+const RANKED = (req: Seen) => {
+  if (req.url === '/v1/marathon') return { status: 200, body: { gameId: 'g1', seed: 77 } }
+  return { status: 200, body: EMPTY_LEADERBOARD }
+}
+
+async function topOut(ui: Ui) {
   for (let i = 0; i < 40; i++) {
     await ui.key({ key: ' ' })
     await ui.advance(16)
   }
   for (let i = 0; i < 6; i++) await ui.advance(200)
+}
+
+test('a ranked marathon sends its log once at game over', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  await topOut(ui)
   const posts = seen.filter(r => r.url.endsWith('/v1/scores'))
   expect(posts).toHaveLength(1)
-  expect(posts[0]).toMatchObject({ method: 'POST', auth: 'Bearer sess_1', body: { mode: 'marathon', lines: 0, level: 1 } })
-  expect((posts[0]?.body as { score: number }).score).toBeGreaterThan(0)
+  const body = posts[0]!.body as { gameId: string; log: { steps: number; inputs: number[] } }
+  expect(body.gameId).toBe('g1')
+  expect(body.log.steps).toBeGreaterThan(0)
+  expect(body.log.inputs.length % 2).toBe(0)
+  // the hard drops pressed are in the log as code 5
+  expect(body.log.inputs.filter((v, i) => i % 2 === 1 && v === 5).length).toBeGreaterThan(5)
   expect(await shown(ui)).toContain('GAME OVER')
+})
+
+test('quitting a ranked marathon still sends the game', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  await ui.key({ key: 'left' })
+  await ui.advance(200)
+  await ui.key({ key: 'q' })
+  for (let i = 0; i < 5; i++) await ui.advance(48)
+  expect(seen.filter(r => r.url.endsWith('/v1/scores'))).toHaveLength(1)
+})
+
+test('an unranked marathon says so and sends nothing', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, req => (req.url === '/v1/marathon' ? { status: 429, body: { error: 'too many open games' } } : { status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  await topOut(ui)
+  expect(seen.filter(r => r.url.endsWith('/v1/scores'))).toHaveLength(0)
+  expect(await shown(ui)).toContain('unranked')
+})
+
+test('marathon starts unranked within 3 s when the server never answers', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on, SIGNED_IN)
+  // Held until the end, so the hooks finish before the test's environment goes away.
+  let release = () => undefined as void
+  on('http.fetch', async () => new Promise(r => (release = () => r({ value: reply({}, 503) }))))
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  expect(await shown(ui)).toContain('Starting')
+  for (let i = 0; i < 16; i++) await ui.advance(200)
+  await ui.key({ key: ' ' })
+  await ui.advance(48)
+  expect(await score(ui)).toBeGreaterThan(0)
+  release()
+  await ui.advance(48)
+})
+
+test('a log larger than one post arrives whole', { timeoutMs: 60_000 }, async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  await ui.advance(16)
+  // 5,001 presses log 10,002 values: two chunks
+  for (let i = 0; i < 5_001; i++) await ui.key({ key: i % 2 ? 'left' : 'right' })
+  await ui.advance(16)
+  await ui.key({ key: 'q' })
+  for (let i = 0; i < 20; i++) await ui.advance(48)
+  const posts = seen.filter(r => r.url.endsWith('/v1/scores'))
+  expect(posts).toHaveLength(1)
+  expect((posts[0]!.body as { log: { inputs: number[] } }).log.inputs.length).toBe(10_002)
+})
+
+test('battle: every applied attack is logged once and the log goes out after the result', async ($: Engine, on: On) => {
+  mock.clock(on)
+  let syncs = 0
+  const seen = serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    if (req.url === '/v1/battle/r1/log') return { status: 204, body: {} }
+    syncs++
+    const incoming = syncs >= 2 ? [{ id: 7, lines: 3 }, { id: 8, lines: 2 }] : [{ id: 7, lines: 3 }]
+    return { status: 200, body: { opponent: OPPONENT, incoming, ...(syncs >= 6 ? { result: { winner: 'alice' } } : {}) } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
+  for (let i = 0; i < 20; i++) await ui.advance(200)
+  const logs = seen.filter(r => r.url.endsWith('/v1/battle/r1/log'))
+  expect(logs).toHaveLength(1)
+  const garbage = (logs[0]!.body as { log: { garbage: number[] } }).log.garbage
+  expect(garbage.filter((_, i) => i % 2 === 1)).toEqual([7, 8])
+})
+
+test('battle: garbage that arrives after topping out is neither applied nor logged', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  let sawOver = false
+  const seen = serve(on, req => {
+    if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
+    if (req.url === '/v1/battle/r1/log') return { status: 204, body: {} }
+    const over = (req.body as { isOver: boolean }).isOver
+    if (!over) return { status: 200, body: { opponent: OPPONENT, incoming: [] } }
+    if (!sawOver) {
+      sawOver = true
+      return { status: 200, body: { opponent: OPPONENT, incoming: [{ id: 9, lines: 4 }] } }
+    }
+    return { status: 200, body: { opponent: OPPONENT, incoming: [{ id: 9, lines: 4 }], result: { winner: 'bob' } } }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  await topOut(ui)
+  for (let i = 0; i < 20; i++) {
+    await clock.advance(250)
+    await ui.advance(200)
+  }
+  const logs = seen.filter(r => r.url.endsWith('/v1/battle/r1/log'))
+  expect(logs).toHaveLength(1)
+  const garbage = (logs[0]!.body as { log: { garbage?: number[] } }).log.garbage ?? []
+  expect(garbage.filter((_, i) => i % 2 === 1)).not.toContain(9)
 })
 
 test('battle: a failed queue poll takes the player off the server queue before it stops', async ($: Engine, on: On) => {
@@ -314,6 +440,7 @@ test('after game over and the settled animation, r still restarts', async ($: En
   serve(on, () => ({ status: 200, body: { marathon: [], wins: [] } }))
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'return' })
+  await ui.advance(100)
   for (let i = 0; i < 40; i++) {
     await ui.key({ key: ' ' })
     await ui.advance(16)
@@ -321,6 +448,7 @@ test('after game over and the settled animation, r still restarts', async ($: En
   await ui.advance(5_000)
   expect(await shown(ui)).toContain('GAME OVER')
   await ui.key({ key: 'r' })
+  await ui.advance(100)
   await ui.advance(32)
   expect(await shown(ui)).not.toContain('GAME OVER')
 })
@@ -421,10 +549,12 @@ test('a battle log goes to the room after the result', async ($: Engine, on: On)
   await ui.key({ key: 'return' })
   for (let i = 0; i < 6; i++) await ui.advance(200)
   await ui.post(chunk('r1', 'battle', [4, 5, 0, 7], 2))
-  await ui.advance(48)
+  for (let i = 0; i < 6; i++) await ui.advance(48)
   const logs = seen.filter(r => r.url.endsWith('/v1/battle/r1/log'))
   expect(logs).toHaveLength(1)
-  expect(logs[0]!.body).toEqual({ log: { steps: 50, inputs: [4, 5], garbage: [0, 7] } })
+  const log = (logs[0]!.body as { log: { steps: number; inputs: number[] } }).log
+  expect(log.steps).toBeGreaterThanOrEqual(1)
+  expect(log.inputs.length % 2).toBe(0)
 })
 
 test('a 404 on sync ends the match with a reason', async ($: Engine, on: On) => {

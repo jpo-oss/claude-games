@@ -5,14 +5,17 @@ import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_
 import type { Ch, Fx, Label, Overlay, Size } from './draw'
 import { newGame, receiveGarbage, snapshot, step } from './engine'
 import type { Game, GameEvent, Input, Mode } from './engine'
+import { STEP_MS, chunkAt, newPace, newRecorder, recordGarbage, recordStep, stepsDue, toUpload } from './log'
+import type { LogMsg, Pace, Recorder, Upload } from './log'
 import { serverUrlOk } from './net'
 
-const TICK_MS = 16
 // Rows per down press; tuned by feel (1 was too slow). A step stops at the floor, so more never locks.
 const SOFT_DROP_ROWS = 2
 const SYNC_MS = 200
+const START_WAIT_MS = 3_000
+const UPLOAD_RESEND_MS = 250
 
-type Screen = 'menu' | 'servers' | 'lobby' | 'play' | 'leaderboard'
+type Screen = 'menu' | 'servers' | 'lobby' | 'play' | 'leaderboard' | 'starting'
 
 // Everything mutable lives here, so the 16 ms tick changes it in place and asks for a redraw only when
 // something visible moved. `rev` is what setState carries to make the engine call the module again.
@@ -25,7 +28,15 @@ type Live = {
   game: Game | null
   inputs: Input[]
   t: number
-  lastAt: number
+  pace: Pace
+  rec: Recorder
+  gameId: string | null
+  nonce: number
+  waitMs: number
+  uploads: Upload[]
+  uploadMs: number
+  lastAck: number
+  hasSentLog: boolean
   isPaused: boolean
   fx: Fx
   overMs: number
@@ -62,7 +73,8 @@ const emptyProps = (): GameView => ({
 })
 
 const newLive = (props: GameView): Live => ({
-  props, rev: 0, screen: 'menu', menu: 0, mode: 'marathon', game: null, inputs: [], t: 0, lastAt: 0,
+  props, rev: 0, screen: 'menu', menu: 0, mode: 'marathon', game: null, inputs: [], t: 0,
+  pace: newPace(), rec: newRecorder(), gameId: null, nonce: 0, waitMs: 0, uploads: [], uploadMs: 0, lastAck: -1, hasSentLog: false,
   isPaused: false, fx: emptyFx(), overMs: 0, applied: [], outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
   hasPostedOver: false, result: null, isDirty: true, hasKeyed: false, pick: 0, typing: null, typeError: null,
 })
@@ -136,12 +148,52 @@ function startGame(live: Live, mode: Mode, seed: number) {
   live.syncMs = 0
   live.hasPostedOver = false
   live.result = null
+  live.pace = newPace()
+  live.rec = newRecorder()
+  live.hasSentLog = false
   live.isDirty = true
 }
 
 const randomSeed = () => Math.floor(Math.random() * 0x100000000)
 
+function askMarathon(live: Live) {
+  live.screen = 'starting'
+  live.nonce++
+  live.waitMs = 0
+  live.outbox.push({ type: 'menu', choice: 'marathon', nonce: live.nonce })
+  live.isDirty = true
+}
+
+function queueUpload(live: Live, kind: 'marathon' | 'battle') {
+  const key = kind === 'marathon' ? live.gameId : live.roomId
+  if (key === null) return
+  const u = toUpload(kind, key, live.rec)
+  if (u) live.uploads.push(u)
+}
+
+// One chunk at a time: the next goes when the hooks' acknowledged position moves, or again after
+// UPLOAD_RESEND_MS if it did not. Done once the hooks hold the whole stream for its key.
+function nextChunk(live: Live): LogMsg | null {
+  const u = live.uploads[0]
+  if (!u) return null
+  const ack = live.props.uploaded
+  const isAcked = ack !== null && ack.key === u.key
+  const have = isAcked ? ack.have : 0
+  if (isAcked && have >= u.stream.length) {
+    live.uploads.shift()
+    live.lastAck = -1
+    live.uploadMs = 0
+    return nextChunk(live)
+  }
+  live.uploadMs += STEP_MS
+  if (have === live.lastAck && live.uploadMs < UPLOAD_RESEND_MS) return null
+  live.lastAck = have
+  live.uploadMs = 0
+  return chunkAt(u, have)
+}
+
 function leave(live: Live) {
+  if (live.mode === 'marathon' && live.game && !live.game.isOver) queueUpload(live, 'marathon')
   live.screen = 'menu'
   live.game = null
   live.result = null
@@ -208,10 +260,8 @@ function onKey(live: Live, key: string) {
     if (k === 'up' || k === 'k') live.menu = (live.menu + MENU.length - 1) % MENU.length
     else if (k === 'down' || k === 'j') live.menu = (live.menu + 1) % MENU.length
     else if (k === 'return' || k === ' ') {
-      if (live.menu === 0) {
-        live.outbox.push({ type: 'menu', choice: 'marathon' })
-        startGame(live, 'marathon', randomSeed())
-      } else if (live.menu === 1) {
+      if (live.menu === 0) askMarathon(live)
+      else if (live.menu === 1) {
         live.screen = 'servers'
         live.pick = 0
         live.typing = null
@@ -231,7 +281,7 @@ function onKey(live: Live, key: string) {
 
     return
   }
-  if (live.screen === 'lobby' || live.screen === 'leaderboard') {
+  if (live.screen === 'lobby' || live.screen === 'leaderboard' || live.screen === 'starting') {
     if (k === 'q' || k === 'return') leave(live)
     else if (k === 'r' && live.screen === 'leaderboard') live.outbox.push({ type: 'menu', choice: 'leaderboard' })
     live.isDirty = true
@@ -242,12 +292,13 @@ function onKey(live: Live, key: string) {
   const game = live.game
   if (!game) return
   if (game.isOver || live.result) {
-    if (k === 'r' && live.mode === 'marathon') startGame(live, 'marathon', randomSeed())
+    if (k === 'r' && live.mode === 'marathon') askMarathon(live)
 
     return
   }
   if (k === 'p' && live.mode === 'marathon') {
     live.isPaused = !live.isPaused
+    live.pace = newPace()
     live.isDirty = true
 
     return
@@ -266,17 +317,27 @@ function onKey(live: Live, key: string) {
 }
 
 function tick(live: Live) {
-  // Real time between frames, so a slow terminal does not slow the game; never less than one
-  // frame (keeps tests on the kit's frame clock exact) and capped so a stall does not teleport pieces.
-  const at = performance.now()
-  const dt = live.lastAt === 0 ? TICK_MS : Math.min(100, Math.max(TICK_MS, at - live.lastAt))
-  live.lastAt = at
+  const n = live.screen === 'play' && !live.isPaused ? stepsDue(live.pace, performance.now()) : 1
+  const dt = n * STEP_MS
   live.t += dt
   const p = live.props
   if (live.screen === 'lobby' && p.battle.status === 'matched' && p.battle.roomId !== null && p.battle.roomId !== live.roomId) {
     live.roomId = p.battle.roomId
     live.applied = []
+    live.gameId = null
     startGame(live, 'battle', p.battle.seed)
+  }
+  if (live.screen === 'starting') {
+    live.waitMs += STEP_MS
+    const m = p.marathon
+    if (m && m.nonce === live.nonce) {
+      live.gameId = m.gameId
+      startGame(live, 'marathon', m.gameId === null ? randomSeed() : m.seed)
+    } else if (live.waitMs >= START_WAIT_MS) {
+      live.gameId = null
+      startGame(live, 'marathon', randomSeed())
+    }
+    if (live.t % 320 < STEP_MS) live.isDirty = true
   }
   if (live.screen === 'play' && live.mode === 'battle' && live.roomId !== null && p.battle.status === 'idle') {
     // The server dropped the match under us: back to the lobby, where the notice is shown.
@@ -291,28 +352,43 @@ function tick(live: Live) {
   if (live.screen === 'play' && game) {
     if (live.mode === 'battle' && live.roomId === p.battle.roomId) {
       let g = game
-      for (const inc of p.battle.incoming) {
-        if (live.applied.includes(inc.id)) continue
-        live.applied.push(inc.id)
-        g = receiveGarbage(g, inc.lines)
-        dirty = true
+      if (!g.isOver && !live.result) {
+        for (const inc of p.battle.incoming) {
+          if (live.applied.includes(inc.id)) continue
+          live.applied.push(inc.id)
+          recordGarbage(live.rec, inc.id)
+          g = receiveGarbage(g, inc.lines)
+          dirty = true
+        }
       }
       live.game = g
       if (p.battle.result && !live.result) {
         live.result = p.battle.result
         dirty = true
       }
+      if (live.result && !live.hasSentLog) {
+        live.hasSentLog = true
+        queueUpload(live, 'battle')
+      }
     }
-    const cur = live.game!
-    if (!live.isPaused && !cur.isOver && !live.result) {
-      const inputs = live.inputs
+    if (!live.isPaused && !live.game!.isOver && !live.result) {
+      let inputs = live.inputs
       live.inputs = []
-      const a = cur.active
-      const r = step(cur, inputs, dt)
-      live.game = r.game
-      applyEvents(live, cur, r.events)
-      const b = r.game.active
-      if (inputs.length > 0 || r.events.length > 0 || a?.x !== b?.x || a?.y !== b?.y || a?.rotation !== b?.rotation || a?.kind !== b?.kind) dirty = true
+      let g = live.game!
+      const a = g.active
+      let moved = inputs.length > 0
+      // A full recorder freezes the board: nothing past it could be verified.
+      for (let i = 0; i < n && !g.isOver && !live.rec.isFull; i++) {
+        recordStep(live.rec, inputs)
+        const r = step(g, inputs, STEP_MS)
+        applyEvents(live, g, r.events)
+        if (r.events.length > 0) moved = true
+        g = r.game
+        inputs = []
+      }
+      live.game = g
+      const b = g.active
+      if (moved || a?.x !== b?.x || a?.y !== b?.y || a?.rotation !== b?.rotation || a?.kind !== b?.kind) dirty = true
     }
     const now = live.game!
     if (now.isOver || live.result) {
@@ -324,7 +400,8 @@ function tick(live: Live) {
 
     if (now.isOver && !live.hasPostedOver) {
       live.hasPostedOver = true
-      if (live.mode !== 'marathon') {
+      if (live.mode === 'marathon') queueUpload(live, 'marathon')
+      else {
         live.outbox.push({ type: 'sync', seq: ++live.seq, attacks: live.attacks.splice(0), snapshot: snapshot(now), isOver: true })
       }
     }
@@ -531,7 +608,7 @@ function drawPlay(live: Live, surface: Surf) {
   let overlay: Overlay | null = null
   if (isDone && live.overMs > OVER_FINAL_MS) {
     const text = live.result ? (live.result === 'win' ? 'YOU WIN' : 'YOU LOSE') : 'GAME OVER'
-    overlay = { title: text, color: live.result === 'win' ? '#38d64a' : '#ff3b3b', lines: [`SCORE ${game.score}`, '', live.mode === 'marathon' ? 'r restart  q menu' : 'q menu'] }
+    overlay = { title: text, color: live.result === 'win' ? '#38d64a' : '#ff3b3b', lines: [`SCORE ${game.score}`, live.mode === 'marathon' && live.gameId === null ? 'unranked' : '', live.mode === 'marathon' ? 'r restart  q menu' : 'q menu'] }
   }
   const pending = game.pendingGarbage.reduce((n, g) => n + g.lines, 0)
   const flash = fx.levelUp !== null && Math.floor(fx.levelUp / 100) % 2 === 0
@@ -632,6 +709,17 @@ function drawMenu(live: Live, surface: Surf) {
       <Text dimColor>up/down choose  enter starts</Text>
       <Text dimColor>Esc hands the keys back</Text>
       {live.hasKeyed ? <Text dimColor>keys: arrows up/x space c q</Text> : <Text bold color="yellow">{activate(cols)}</Text>}
+    </Box>
+  )
+}
+
+function drawStarting(live: Live, surface: Surf) {
+  const { Box, Text } = surface.elements
+
+  return (
+    <Box flexDirection="column" alignItems="center" paddingX={1}>
+      <Text bold color="cyan">MARATHON</Text>
+      <Text>{`Starting${'.'.repeat(1 + (Math.floor(live.t / 320) % 3))}`}</Text>
     </Box>
   )
 }
@@ -747,9 +835,10 @@ const Game: ClientModule<GameView, Shell> = (props, surface) => {
     const live = newLive(props)
     shell = { live, rev: 0 }
     const commit = () => surface.setState({ live, rev: ++live.rev })
-    surface.every(TICK_MS, () => {
+    surface.every(STEP_MS, () => {
       const dirty = tick(live)
-      const msg = live.outbox.shift()
+      // One post per tick: a later post in the same frame would replace this one.
+      const msg = live.outbox.shift() ?? nextChunk(live)
       if (msg) surface.post(msg)
       if (dirty) commit()
     })
@@ -763,6 +852,7 @@ const Game: ClientModule<GameView, Shell> = (props, surface) => {
   live.props = props ?? emptyProps()
 
   if (live.screen === 'play' && live.game) return drawPlay(live, surface)
+  if (live.screen === 'starting') return drawStarting(live, surface)
   if (live.screen === 'servers') return drawServers(live, surface)
   if (live.screen === 'lobby') return drawLobby(live, surface)
   if (live.screen === 'leaderboard') return drawLeaderboard(live, surface)
