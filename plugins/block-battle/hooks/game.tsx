@@ -279,7 +279,7 @@ function onKey(live: Live, key: string) {
     return
   }
   if (live.screen === 'lobby' || live.screen === 'leaderboard' || live.screen === 'starting') {
-    if (k === 'q' || k === 'return') leave(live)
+    if (k === 'q' || (k === 'return' && live.screen !== 'starting')) leave(live)
     else if (k === 'r' && live.screen === 'leaderboard') live.outbox.push({ type: 'menu', choice: 'leaderboard' })
     live.isDirty = true
 

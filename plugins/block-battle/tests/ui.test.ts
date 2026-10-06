@@ -994,3 +994,20 @@ test('a topped-out player whose syncs keep failing is taken out of the match', a
   await clock.advance(10_000)
   expect(syncs()).toBe(after)
 })
+
+test('Enter on the Starting screen does not cancel the game it asked for; q does', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on, SIGNED_IN)
+  let release = () => undefined as void
+  on('http.fetch', async () => new Promise(r => (release = () => r({ value: reply({ gameId: 'g1', seed: 77 }) }))))
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('Starting')
+  await ui.key({ key: 'q' })
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('Play while Claude works')
+  release()
+  await ui.advance(48)
+})
