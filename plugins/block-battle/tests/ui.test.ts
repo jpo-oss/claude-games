@@ -349,12 +349,14 @@ test('a log larger than one post arrives whole', { timeoutMs: 60_000 }, async ($
 test('battle: every applied attack is logged once and the log goes out after the result', async ($: Engine, on: On) => {
   mock.clock(on)
   let syncs = 0
+  let hasResult = false
   const seen = serve(on, req => {
     if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
-    if (req.url === '/v1/battle/r1/log') return { status: 204, body: {} }
+    if (req.url === '/v1/battle/r1/log') return hasResult ? { status: 204, body: {} } : { status: 409, body: { error: 'no result yet' } }
     syncs++
     const incoming = syncs >= 2 ? [{ id: 7, lines: 3 }, { id: 8, lines: 2 }] : [{ id: 7, lines: 3 }]
-    return { status: 200, body: { opponent: OPPONENT, incoming, ...(syncs >= 6 ? { result: { winner: 'alice' } } : {}) } }
+    if (syncs >= 6) hasResult = true
+    return { status: 200, body: { opponent: OPPONENT, incoming, ...(hasResult ? { result: { winner: 'alice' } } : {}) } }
   })
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
@@ -538,9 +540,11 @@ test('a log for a game this session never started is dropped', async ($: Engine,
 
 test('a battle log goes to the room after the result', async ($: Engine, on: On) => {
   mock.clock(on)
+  let hasResult = false
   const seen = serve(on, req => {
     if (req.url === '/v1/battle/queue') return { status: 200, body: { status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } } }
-    if (req.url === '/v1/battle/r1/log') return { status: 204, body: {} }
+    if (req.url === '/v1/battle/r1/log') return hasResult ? { status: 204, body: {} } : { status: 409, body: { error: 'no result yet' } }
+    hasResult = true
     return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: 'alice' } } }
   })
   const ui = await $.ui.mount(target('terminal'))
