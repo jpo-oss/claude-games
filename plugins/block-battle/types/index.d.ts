@@ -21,12 +21,23 @@ export type GameView = {
   // Short human line shown instead of the leaderboard or lobby when the server is unreachable.
   notice: string | null
   battle: Battle
+  servers: Servers
+}
+
+export type Servers = {
+  // The plugin's configured server, the official one unless the player changed the setting.
+  home: string
+  isHomeOfficial: boolean
+  last: string | null
+  // Where Battle and the leaderboard talk to right now.
+  active: string
 }
 
 // Everything a Client posts to the hooks side. Attacks ride inside `sync`: a post
 // replaces an undelivered one within a frame, so a separate message could be lost.
 export type ClientMsg =
-  | { type: 'menu'; choice: 'marathon' | 'battle' | 'leaderboard' | 'back' }
+  | { type: 'menu'; choice: 'marathon' | 'leaderboard' | 'back' }
+  | { type: 'menu'; choice: 'battle'; server: string }
   | { type: 'gameOver'; score: number; lines: number; level: number; durationMs: number }
   | { type: 'sync'; seq: number; attacks: number[]; snapshot: string; isOver: boolean }
 

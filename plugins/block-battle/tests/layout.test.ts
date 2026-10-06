@@ -98,8 +98,19 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     const ui = await open($, size)
     await ui.key({ key: 'down' })
     await ui.key({ key: 'return' })
+    await ui.key({ key: 'return' })
     await ui.advance(48)
     emit(`${size}-lobby`, await screen(ui, size))
+  })
+
+  test(`${size}: the server picker fits`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on)
+    const ui = await open($, size)
+    await ui.key({ key: 'down' })
+    await ui.key({ key: 'return' })
+    await ui.advance(48)
+    emit(`${size}-servers`, await screen(ui, size))
   })
 
   test(`${size}: a game with a held piece fits`, async ($: Engine, on: On) => {

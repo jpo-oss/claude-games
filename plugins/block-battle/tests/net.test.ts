@@ -119,7 +119,9 @@ test('the leaderboard keeps five rows a side and drops rows with missing fields'
 })
 
 test('what a Client posts is validated before it is acted on', () => {
-  expect(parseClientMsg({ type: 'menu', choice: 'battle' })).toEqual({ type: 'menu', choice: 'battle' })
+  expect(parseClientMsg({ type: 'menu', choice: 'battle', server: 'https://a.example' })).toEqual({ type: 'menu', choice: 'battle', server: 'https://a.example' })
+  expect(parseClientMsg({ type: 'menu', choice: 'battle' })).toBe(null)
+  expect(parseClientMsg({ type: 'menu', choice: 'battle', server: 'http://evil.example' })).toBe(null)
   expect(parseClientMsg({ type: 'menu', choice: 'wipe' })).toBe(null)
   expect(parseClientMsg({ type: 'gameOver', score: 10, lines: 1, level: 1, durationMs: 5000 })).toEqual({
     type: 'gameOver', score: 10, lines: 1, level: 1, durationMs: 5000,

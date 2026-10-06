@@ -5,13 +5,14 @@ import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_
 import type { Ch, Fx, Label, Overlay, Size } from './draw'
 import { newGame, receiveGarbage, snapshot, step } from './engine'
 import type { Game, GameEvent, Input, Mode } from './engine'
+import { serverUrlOk } from './net'
 
 const TICK_MS = 16
 // Rows per down press; tuned by feel (1 was too slow). A step stops at the floor, so more never locks.
 const SOFT_DROP_ROWS = 2
 const SYNC_MS = 200
 
-type Screen = 'menu' | 'lobby' | 'play' | 'leaderboard'
+type Screen = 'menu' | 'servers' | 'lobby' | 'play' | 'leaderboard'
 
 // Everything mutable lives here, so the 16 ms tick changes it in place and asks for a redraw only when
 // something visible moved. `rev` is what setState carries to make the engine call the module again.
@@ -38,12 +39,16 @@ type Live = {
   result: 'win' | 'loss' | null
   isDirty: boolean
   hasKeyed: boolean
+  pick: number
+  // The address being typed on the server screen, or null while choosing from the list.
+  typing: string | null
+  typeError: string | null
 }
 
 const MENU = [
   { label: 'Marathon', hint: 'solo, endless levels' },
   { label: 'Battle', hint: 'online 1v1' },
-  { label: 'Leaderboard', hint: 'team top 5' },
+  { label: 'Leaderboard', hint: 'top 5' },
 ] as const
 
 const emptyProps = (): GameView => ({
@@ -51,12 +56,13 @@ const emptyProps = (): GameView => ({
   leaderboard: null,
   notice: null,
   battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null },
+  servers: { home: '', isHomeOfficial: true, last: null, active: '' },
 })
 
 const newLive = (props: GameView): Live => ({
   props, rev: 0, screen: 'menu', menu: 0, mode: 'marathon', game: null, inputs: [], t: 0, lastAt: 0,
   isPaused: false, fx: emptyFx(), overMs: 0, applied: [], outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
-  hasPostedOver: false, result: null, isDirty: true, hasKeyed: false,
+  hasPostedOver: false, result: null, isDirty: true, hasKeyed: false, pick: 0, typing: null, typeError: null,
 })
 
 const CLEAR_NAMES: Record<string, string> = {
@@ -141,6 +147,58 @@ function leave(live: Live) {
   live.isDirty = true
 }
 
+type ServerChoice = { label: string; url: string | null }
+
+function serverChoices(live: Live): ServerChoice[] {
+  const { home, isHomeOfficial, last } = live.props.servers
+  const list: ServerChoice[] = [
+    { label: isHomeOfficial ? 'Official server' : `Your server  ${hostOf(home)}`, url: home },
+    { label: 'Enter a server address...', url: null },
+  ]
+  if (last && last !== home) list.push({ label: `${hostOf(last)}  (last used)`, url: last })
+
+  return list
+}
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
+function playOn(live: Live, server: string) {
+  live.screen = 'lobby'
+  live.typing = null
+  live.outbox.push({ type: 'menu', choice: 'battle', server: server.replace(/\/+$/, '') })
+}
+
+function onServerKey(live: Live, key: string) {
+  if (live.typing !== null) {
+    if (key === 'return') {
+      const url = live.typing.trim()
+      if (serverUrlOk(url)) playOn(live, url)
+      else live.typeError = 'The address must start with https://'
+    } else if (key === 'backspace' || key === 'delete') live.typing = live.typing.slice(0, -1)
+    else if (key === 'up' || key === 'down') live.typing = null
+    else if (key.length === 1 && key >= ' ' && live.typing.length < 200) live.typing += key
+    if (key !== 'return') live.typeError = null
+
+    return
+  }
+  const choices = serverChoices(live)
+  const k = key.length === 1 && key !== ' ' ? key.toLowerCase() : key
+  if (k === 'up' || k === 'k') live.pick = (live.pick + choices.length - 1) % choices.length
+  else if (k === 'down' || k === 'j') live.pick = (live.pick + 1) % choices.length
+  else if (k === 'q') live.screen = 'menu'
+  else if (k === 'return' || k === ' ') {
+    const c = choices[live.pick]!
+    if (c.url === null) live.typing = ''
+    else playOn(live, c.url)
+  }
+}
+
 function onKey(live: Live, key: string) {
   live.hasKeyed = true
   const k = key.length === 1 && key !== ' ' ? key.toLowerCase() : key
@@ -152,13 +210,21 @@ function onKey(live: Live, key: string) {
         live.outbox.push({ type: 'menu', choice: 'marathon' })
         startGame(live, 'marathon', randomSeed())
       } else if (live.menu === 1) {
-        live.screen = 'lobby'
-        live.outbox.push({ type: 'menu', choice: 'battle' })
+        live.screen = 'servers'
+        live.pick = 0
+        live.typing = null
+        live.typeError = null
       } else {
         live.screen = 'leaderboard'
         live.outbox.push({ type: 'menu', choice: 'leaderboard' })
       }
     }
+    live.isDirty = true
+
+    return
+  }
+  if (live.screen === 'servers') {
+    onServerKey(live, key)
     live.isDirty = true
 
     return
@@ -570,6 +636,41 @@ function drawMenu(live: Live, surface: Surf) {
   )
 }
 
+function drawServers(live: Live, surface: Surf) {
+  const { Box, Text } = surface.elements
+  const w = Math.min(46, Math.max(24, surface.columns - 2))
+  const inner = w - 2
+  const choices = serverChoices(live)
+  const typing = live.typing
+
+  return (
+    <Box flexDirection="column" alignItems="center" paddingX={1}>
+      <Text bold color="cyan">BATTLE</Text>
+      <Text dimColor>Where do you want to play?</Text>
+      {panel(
+        surface,
+        w,
+        FRAME,
+        typing === null ? (
+          choices.map((c, i) => {
+            const sel = i === live.pick
+            const text = (' ' + (sel ? '> ' : '  ') + c.label).padEnd(inner).slice(0, inner)
+
+            return <Text bold={sel} inverse={sel} color={sel ? 'cyan' : undefined}>{text}</Text>
+          })
+        ) : (
+          <Box flexDirection="column" paddingX={1}>
+            <Text>Server address:</Text>
+            <Text color="cyan">{(typing + '_').slice(-(inner - 2))}</Text>
+            {live.typeError ? <Text color="red">{live.typeError}</Text> : <Text dimColor>enter connects, up goes back</Text>}
+          </Box>
+        ),
+      )}
+      <Text dimColor>{typing === null ? 'enter picks, q goes back' : ' '}</Text>
+    </Box>
+  )
+}
+
 function drawLobby(live: Live, surface: Surf) {
   const { Box, Text } = surface.elements
   const { notice, battle } = live.props
@@ -626,6 +727,7 @@ function drawLeaderboard(live: Live, surface: Surf) {
   return (
     <Box flexDirection="column" alignItems="center" paddingX={1}>
       <Text bold color="cyan">LEADERBOARD</Text>
+      <Text dimColor>{hostOf(live.props.servers.active)}</Text>
       {leaderboard ? (
         <Box flexDirection={wide ? 'row' : 'column'} gap={1}>
           {board(surface, 'Marathon top 5', 'no scores yet', leaderboard.marathon.map(r => ({ login: r.login, value: r.score })), w, me)}
@@ -661,6 +763,7 @@ const Game: ClientModule<GameView, Shell> = (props, surface) => {
   live.props = props ?? emptyProps()
 
   if (live.screen === 'play' && live.game) return drawPlay(live, surface)
+  if (live.screen === 'servers') return drawServers(live, surface)
   if (live.screen === 'lobby') return drawLobby(live, surface)
   if (live.screen === 'leaderboard') return drawLeaderboard(live, surface)
 

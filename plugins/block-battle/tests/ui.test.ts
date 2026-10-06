@@ -110,6 +110,7 @@ test('battle: each incoming attack is applied once, however often the server rep
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
   await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
   for (let i = 0; i < 6; i++) await ui.advance(200)
@@ -281,6 +282,7 @@ test('battle: a failed queue poll takes the player off the server queue before i
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
   await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
   await clock.advance(1_600)
@@ -298,6 +300,7 @@ test('battle: a 401 during sync ends the match once and does not retry with the 
   })
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -330,6 +333,7 @@ test('battle: a 410 on sync clears the battle, stops syncing and sends no queue 
   })
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -473,6 +477,7 @@ test('the code stays visible when the player moves from Leaderboard to Battle', 
   await ui.key({ key: 'q' })
   await ui.key({ key: 'up' })
   await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
   expect(await shown(ui)).toContain('WDJB-MJHT')
@@ -514,6 +519,7 @@ test('a winner who is neither player is not shown as a win', async ($: Engine, o
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
   await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
   for (let i = 0; i < 6; i++) await ui.advance(200)
@@ -528,6 +534,7 @@ test('a battle the player really won shows a win', async ($: Engine, on: On) => 
   })
   const ui = await $.ui.mount(target('terminal'))
   await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -564,6 +571,7 @@ test('signing out with no session still answers', async ($: Engine, on: On) => {
 
 async function startBattle(ui: Ui) {
   await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -606,4 +614,100 @@ test('a match the server drops goes back to the lobby with the reason', async ($
   await startBattle(ui)
   for (let i = 0; i < 6; i++) await ui.advance(200)
   expect(await shown(ui)).toContain('The match is no longer available')
+})
+
+async function openPicker(ui: Ui) {
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+}
+
+async function typeText(ui: Ui, text: string) {
+  for (const c of text) await ui.key({ key: c })
+}
+
+const ACME = 'https://games.acme.dev'
+const BOTH = { ...SIGNED_IN, ['session:' + ACME]: { session: 'acme_sess', login: 'alice' } }
+const MATCH = { status: 200, body: { status: 'waiting' } }
+
+test('choosing Battle asks where to play', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, () => MATCH)
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  expect(await shown(ui)).toContain('Official server')
+  expect(await shown(ui)).toContain('Enter a server address')
+})
+
+test('the official server is the first choice', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, () => MATCH)
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  expect(seen.find(r => r.url.endsWith('/v1/battle/queue'))?.url).toBe('https://games.jpoapps.com/v1/battle/queue')
+})
+
+test('a typed address is used, with only that server\'s session', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, () => MATCH, BOTH)
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await typeText(ui, ACME)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  const queue = seen.filter(r => r.url.endsWith('/v1/battle/queue'))
+  expect(queue[0]).toMatchObject({ url: ACME + '/v1/battle/queue', auth: 'Bearer acme_sess' })
+  expect(seen.some(r => r.auth === 'Bearer sess_1')).toBe(false)
+})
+
+test('an unencrypted address is refused and nothing is sent', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, () => MATCH)
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await typeText(ui, 'http://evil.example')
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('must start with https://')
+  expect(seen).toHaveLength(0)
+})
+
+test('the last typed address is offered next time', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, () => MATCH, { ...BOTH, lastServer: ACME })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.advance(48)
+  await openPicker(ui)
+  expect(await shown(ui)).toContain('games.acme.dev')
+})
+
+test('a community server warns before sign-in', async ($: Engine, on: On) => {
+  mock.clock(on)
+  github(on, [], () => MATCH)
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await typeText(ui, ACME)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('run by someone else')
+  expect(await shown(ui)).toContain('WDJB-MJHT')
+})
+
+test('the leaderboard names the server it comes from', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, () => ({ status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  expect(await shown(ui)).toContain('games.jpoapps.com')
 })

@@ -29,6 +29,7 @@ export const MAX_INCOMING = 60
 export const PROTOCOL_VERSION = 1
 
 export function serverUrlOk(u: string): boolean {
+  if (u.length > 200) return false
   try {
     const url = new URL(u)
     return url.protocol === 'https:' || (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'))
@@ -178,7 +179,8 @@ export function parseClientMsg(data: unknown): ClientMsg | null {
   if (!isRecord(data)) return null
   if (data.type === 'menu') {
     const c = data.choice
-    return c === 'marathon' || c === 'battle' || c === 'leaderboard' || c === 'back' ? { type: 'menu', choice: c } : null
+    if (c === 'battle') return typeof data.server === 'string' && serverUrlOk(data.server) ? { type: 'menu', choice: c, server: data.server } : null
+    return c === 'marathon' || c === 'leaderboard' || c === 'back' ? { type: 'menu', choice: c } : null
   }
   if (data.type === 'gameOver') {
     const { score, lines, level, durationMs } = data

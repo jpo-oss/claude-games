@@ -59,7 +59,9 @@ To sign out of the server you're on:
 
 ## Choosing a server
 
-Every game defaults to the official server. To play on a different one, such as your team's:
+When you pick Battle, the game asks where to play: the official server, or a server address you type in. It remembers the last address you typed. Servers other than the official one are run by someone else, and the game says so before you sign in to one.
+
+To make a different server your default, such as your team's:
 
 1. Run `/plugin` and open the **Installed** tab.
 2. Select the game, then **Configure options**.

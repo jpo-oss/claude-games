@@ -26,7 +26,15 @@ const QUEUE_POLL_MS = 1_500
 const QUEUE_GIVE_UP_MS = 120_000
 
 export const idleBattle = (): Battle => ({ status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null })
-const startView = (): GameView => ({ me: null, leaderboard: null, notice: null, battle: idleBattle() })
+const OFFICIAL = 'https://games.jpoapps.com'
+const LAST_SERVER = 'lastServer'
+const startView = (): GameView => ({
+  me: null,
+  leaderboard: null,
+  notice: null,
+  battle: idleBattle(),
+  servers: { home: OFFICIAL, isHomeOfficial: true, last: null, active: OFFICIAL },
+})
 
 const view = atom({ plugin: 'block-battle', key: 'view' } as const, startView())
 
@@ -39,10 +47,18 @@ const BAD_URL = 'The server address must start with https://. Change it in the p
 const TIMEOUT_MS = 30_000
 const NO_GITHUB = "Couldn't reach GitHub to sign in. Solo play still works."
 const CANCELLED = 'Sign-in was cancelled or expired. Pick Battle or Leaderboard to try again.'
-const signInLine = (uri: string, code: string) => `Sign in: open ${uri} and enter ${code}`
+const signInLine = (uri: string, code: string) => {
+  const line = `Sign in: open ${uri} and enter ${code}`
+  if (rt.base === OFFICIAL) return line
+
+  return `Community server ${new URL(rt.base).host}, run by someone else. It will learn your GitHub username. ${line}`
+}
+const trimSlash = (u: string) => u.replace(/\/+$/, '')
 
 const rt: {
   base: string
+  home: string
+  hasLoadedLast: boolean
   // Our server's session key. The GitHub token is never kept: it is exchanged and dropped.
   session: Session | null
   signIn: Timer | null
@@ -62,7 +78,9 @@ const rt: {
   isTurnOn: boolean
   wasNudged: boolean
 } = {
-  base: 'https://games.jpoapps.com',
+  base: OFFICIAL,
+  home: OFFICIAL,
+  hasLoadedLast: false,
   session: null,
   signIn: null,
   isSigningIn: false,
@@ -99,6 +117,32 @@ async function loadSession($: EngineInterface): Promise<Session | null> {
   if (rt.session) await setView($, { me: rt.session.login })
 
   return rt.session
+}
+
+function stopSignIn() {
+  rt.signIn?.cancel()
+  rt.signIn = null
+  rt.isSigningIn = false
+  rt.signInLine = null
+  rt.signInGen++
+}
+
+async function useServer($: EngineInterface, url: string) {
+  const next = trimSlash(url)
+  if (next !== rt.home) {
+    await $.store.set(LAST_SERVER, next)
+    await update($, view, v => ({ ...v, servers: { ...v.servers, last: next } }))
+  }
+  if (next === rt.base) return
+  stopSignIn()
+  rt.base = next
+  rt.session = null
+  await update($, view, v => ({ ...v, me: null, leaderboard: null, servers: { ...v.servers, active: next } }))
+}
+
+async function loadLast($: EngineInterface) {
+  const last = await $.store.get(LAST_SERVER)
+  if (typeof last === 'string' && serverUrlOk(last)) await update($, view, v => ({ ...v, servers: { ...v.servers, last } }))
 }
 
 async function dropSession($: EngineInterface) {
@@ -339,7 +383,12 @@ async function endMatch($: EngineInterface, notice: string) {
 async function handle($: EngineInterface, m: ClientMsg) {
   if (m.type === 'menu') {
     if (m.choice === 'leaderboard') return loadLeaderboard($)
-    if (m.choice === 'battle') return startQueue($)
+    if (m.choice === 'battle') {
+      await resetBattle($, true)
+      await useServer($, m.server)
+
+      return startQueue($)
+    }
     if (m.choice === 'marathon') {
       await setView($, { notice: null })
 
@@ -371,7 +420,8 @@ function tryNudge($: EngineInterface) {
 }
 
 export const register: Register = (on, options) => {
-  rt.base = typeof options.serverUrl === 'string' && options.serverUrl !== '' ? options.serverUrl : rt.base
+  rt.home = typeof options.serverUrl === 'string' && options.serverUrl !== '' ? trimSlash(options.serverUrl) : OFFICIAL
+  rt.base = rt.home
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'cg-block-battle', description: 'Play Block Battle while Claude works. Add "signout" to sign out' })
@@ -393,11 +443,7 @@ export const register: Register = (on, options) => {
 
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE) {
-      rt.signIn?.cancel()
-      rt.signIn = null
-      rt.isSigningIn = false
-      rt.signInLine = null
-      rt.signInGen++
+      stopSignIn()
       await resetBattle($, true)
     }
 
@@ -415,7 +461,12 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
     const { Client } = $.ui.resolve(e)
-    const v = await read($, view)
+    if (!rt.hasLoadedLast) {
+      rt.hasLoadedLast = true
+      void loadLast($).catch(() => undefined)
+    }
+    const stored = await read($, view)
+    const v = { ...stored, servers: { ...stored.servers, home: rt.home, isHomeOfficial: rt.home === OFFICIAL, active: rt.base } }
 
     // Without a size the region is as tall as what the module draws, so a one-line "too small"
     // note would measure the region as one line and keep it there.
