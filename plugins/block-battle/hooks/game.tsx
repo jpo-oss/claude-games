@@ -32,6 +32,7 @@ type Live = {
   gameId: string | null
   nonce: number
   waitMs: number
+  waitAt: number
   uploads: Upload[]
   sender: Sender
   hasSentLog: boolean
@@ -73,7 +74,7 @@ const emptyProps = (): GameView => ({
 
 const newLive = (props: GameView): Live => ({
   props, rev: 0, screen: 'menu', menu: 0, mode: 'marathon', game: null, inputs: [], t: 0,
-  pace: newPace(), rec: newRecorder(), gameId: null, nonce: 0, waitMs: 0, uploads: [], sender: newSender(), hasSentLog: false,
+  pace: newPace(0), rec: newRecorder(), gameId: null, nonce: 0, waitMs: 0, waitAt: 0, uploads: [], sender: newSender(), hasSentLog: false,
   isPaused: false, fx: emptyFx(), overMs: 0, applied: 0, outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
   hasPostedOver: false, result: null, isDirty: true, hasKeyed: false, pick: 0, typing: null, typeError: null,
 })
@@ -147,7 +148,7 @@ function startGame(live: Live, mode: Mode, seed: number) {
   live.syncMs = 0
   live.hasPostedOver = false
   live.result = null
-  live.pace = newPace()
+  live.pace = newPace(performance.now())
   live.rec = newRecorder()
   live.hasSentLog = false
   live.isDirty = true
@@ -159,6 +160,7 @@ function askMarathon(live: Live) {
   live.screen = 'starting'
   live.nonce++
   live.waitMs = 0
+  live.waitAt = performance.now()
   live.outbox.push({ type: 'menu', choice: 'marathon', nonce: live.nonce })
   live.isDirty = true
 }
@@ -293,7 +295,7 @@ function onKey(live: Live, key: string) {
   }
   if (k === 'p' && live.mode === 'marathon') {
     live.isPaused = !live.isPaused
-    live.pace = newPace()
+    live.pace = newPace(performance.now(), live.pace.ran)
     live.isDirty = true
 
     return
@@ -312,9 +314,6 @@ function onKey(live: Live, key: string) {
 }
 
 function tick(live: Live) {
-  const n = live.screen === 'play' && !live.isPaused ? stepsDue(live.pace, performance.now()) : 1
-  const dt = n * STEP_MS
-  live.t += dt
   const p = live.props
   if (live.screen === 'lobby' && p.battle.status === 'matched' && p.battle.roomId !== null && p.battle.roomId !== live.roomId) {
     live.roomId = p.battle.roomId
@@ -328,11 +327,10 @@ function tick(live: Live) {
     if (m && m.nonce === live.nonce) {
       live.gameId = m.gameId
       startGame(live, 'marathon', m.gameId === null ? randomSeed() : m.seed)
-    } else if (live.waitMs >= START_WAIT_MS) {
+    } else if (Math.max(live.waitMs, performance.now() - live.waitAt) >= START_WAIT_MS) {
       live.gameId = null
       startGame(live, 'marathon', randomSeed())
     }
-    if (live.t % 320 < STEP_MS) live.isDirty = true
   }
   if (live.screen === 'play' && live.mode === 'battle' && live.roomId !== null && p.battle.status === 'idle') {
     // The server dropped the match under us: back to the lobby, where the notice is shown.
@@ -342,6 +340,10 @@ function tick(live: Live) {
     live.roomId = null
     live.isDirty = true
   }
+  const n = live.screen === 'play' && !live.isPaused ? stepsDue(live.pace, performance.now()) : 1
+  const dt = n * STEP_MS
+  live.t += dt
+  if (live.screen === 'starting' && live.t % 320 < STEP_MS) live.isDirty = true
   let dirty = live.isDirty
   const game = live.game
   if (live.screen === 'play' && game) {
@@ -366,7 +368,7 @@ function tick(live: Live) {
         queueUpload(live, 'battle')
       }
     }
-    if (!live.isPaused && !live.game!.isOver && !live.result) {
+    if (n > 0 && !live.isPaused && !live.game!.isOver && !live.result) {
       let inputs = live.inputs
       live.inputs = []
       let g = live.game!

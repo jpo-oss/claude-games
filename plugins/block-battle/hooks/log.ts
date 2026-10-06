@@ -5,7 +5,7 @@ export const STEP_MS = 16
 export const MAX_STEPS = 450_000
 const MAX_INPUTS = 200_000
 const MAX_GARBAGE = 10_000
-// Steps run in one tick at most: a longer stall skips time rather than fast-forwarding the board.
+// Steps run in one tick at most; any further debt carries to later ticks.
 const MAX_CATCH_UP = 15
 export const CHUNK = 10_000
 
@@ -47,18 +47,17 @@ export function recordStep(rec: Recorder, inputs: readonly Input[]): void {
   if (rec.steps >= MAX_STEPS) rec.isFull = true
 }
 
-// At least one step per tick: the test kit's frame clock has no real time behind it.
-// ponytail: if the host fires several ticks back to back after a stall, the board runs a little ahead of real time; the server allows 5 s.
-export type Pace = { lastAt: number; owed: number }
+// Steps due = base + max(ticks fired, real time / STEP_MS) - steps run. Ticks keep the test kit's frame
+// clock exact, real time catches up after a host stalls; neither runs ahead of real time on a real host.
+export type Pace = { base: number; ran: number; ticks: number; startAt: number }
 
-export const newPace = (): Pace => ({ lastAt: -1, owed: 0 })
+export const newPace = (at: number, ran = 0): Pace => ({ base: ran, ran, ticks: 0, startAt: at })
 
 export function stepsDue(p: Pace, at: number): number {
-  const gap = p.lastAt < 0 ? STEP_MS : Math.max(0, at - p.lastAt)
-  p.lastAt = at
-  p.owed = Math.min(p.owed + gap, MAX_CATCH_UP * STEP_MS)
-  const n = Math.max(1, Math.floor(p.owed / STEP_MS))
-  p.owed = Math.max(0, p.owed - n * STEP_MS)
+  p.ticks++
+  const target = p.base + Math.max(p.ticks, Math.floor((at - p.startAt) / STEP_MS))
+  const n = Math.max(0, Math.min(MAX_CATCH_UP, target - p.ran))
+  p.ran += n
 
   return n
 }

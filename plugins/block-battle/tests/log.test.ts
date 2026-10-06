@@ -92,15 +92,37 @@ test('a full recorder stops counting, so the log is a valid prefix', () => {
   expect(rec.inputs).toEqual([449_999, 0])
 })
 
-test('stepsDue: one step per 16 ms of real time, at least one per tick, bounded catch-up', () => {
-  const p = newPace()
-  expect(stepsDue(p, 1000)).toBe(1)
-  expect(stepsDue(p, 1016)).toBe(1)
-  expect(stepsDue(p, 1064)).toBe(3)
-  expect(stepsDue(p, 1064)).toBe(1)
-  expect(stepsDue(p, 1072)).toBe(1)
-  expect(stepsDue(p, 1080)).toBe(1)
-  expect(stepsDue(p, 6000)).toBe(15)
+test('stepsDue: one step per tick on the frame clock when real time stands still', () => {
+  const p = newPace(1000)
+  expect([1, 2, 3, 4].map(() => stepsDue(p, 1000))).toEqual([1, 1, 1, 1])
+})
+
+test('stepsDue: real time ahead of ticks catches up at most 15 per tick and carries the rest', () => {
+  const p = newPace(0)
+  expect(stepsDue(p, 16 * 40)).toBe(15)
+  expect(stepsDue(p, 16 * 40)).toBe(15)
+  expect(stepsDue(p, 16 * 40)).toBe(10)
+  expect(stepsDue(p, 16 * 40)).toBe(0)
+  expect(stepsDue(p, 16 * 41)).toBe(1)
+  expect(p.ran).toBe(41)
+})
+
+test('stepsDue: back-to-back ticks never put it ahead of max(ticks, real time)', () => {
+  const p = newPace(0)
+  expect(stepsDue(p, 16 * 10)).toBe(10)
+  // missed ticks fired at once after a hitch: real time already counted them
+  for (let i = 0; i < 9; i++) expect(stepsDue(p, 16 * 10 + 1)).toBe(0)
+  expect(stepsDue(p, 16 * 11 + 1)).toBe(1)
+  expect(p.ran).toBe(11)
+})
+
+test('stepsDue: a rebase starts counting from the steps already run', () => {
+  const p = newPace(0)
+  stepsDue(p, 16 * 5)
+  const q = newPace(10_000, p.ran)
+  expect(stepsDue(q, 10_000)).toBe(1)
+  expect(stepsDue(q, 10_000 + 16 * 3)).toBe(2)
+  expect(q.ran).toBe(8)
 })
 
 test('toUpload skips an empty game and joins inputs then garbage', () => {
