@@ -56,12 +56,20 @@ test('call: ok body, server error, plain-text failure and network failure', asyn
   expect(await call(down, 'http://x', 'GET', '/p', 't')).toEqual({ ok: false, status: 0, error: 'unreachable' })
 })
 
-test('incoming attacks merge by id: a repeat is dropped, new ones append, nothing is capped', () => {
+test('incoming attacks merge by id: a repeat is dropped and new ones append', () => {
   const a = { id: 1, lines: 2 }
   const b = { id: 2, lines: 4 }
   expect(mergeIncoming([a], [a, b])).toEqual([a, b])
   expect(mergeIncoming([a, b], [b, b, a])).toEqual([a, b])
   expect(mergeIncoming([], [a, a])).toEqual([a])
+})
+
+test('merged incoming stops at 10,000, the server cap on garbage in one log', () => {
+  const batch = (from: number, n: number) => Array.from({ length: n }, (_, i) => ({ id: from + i, lines: 1 }))
+  const have = mergeIncoming(batch(1, 6_000), batch(6_001, 6_000))
+  expect(have).toHaveLength(10_000)
+  expect(have[9_999]!.id).toBe(10_000)
+  expect(mergeIncoming(have, batch(20_000, 5))).toHaveLength(10_000)
 })
 
 test('outbox: a failed send is retried with the same seq and attacks; later attacks wait', () => {
@@ -129,10 +137,10 @@ test('what a Client posts is validated before it is acted on', () => {
   expect(parseClientMsg(7)).toBe(null)
 })
 
-test('sync drops attacks that are not whole numbers from 1 to 40, and keeps at most 10,000', () => {
-  const bad = [{ id: 1, lines: 1e9 }, { id: 2, lines: 2.5 }, { id: 3, lines: 0 }, { id: 4, lines: 41 }, { id: 5, lines: 3 }]
+test('sync drops attacks with an id below 1 or lines not a whole number from 1 to 40, and keeps at most 10,000', () => {
+  const bad = [{ id: 0, lines: 2 }, { id: 1, lines: 1e9 }, { id: 2, lines: 2.5 }, { id: 3, lines: 0 }, { id: 4, lines: 41 }, { id: 5, lines: 3 }]
   expect(parseSync({ incoming: bad })?.incoming).toEqual([{ id: 5, lines: 3 }])
-  const many = Array.from({ length: 10_000 }, (_, i) => ({ id: i, lines: 1 }))
+  const many = Array.from({ length: 10_001 }, (_, i) => ({ id: i + 1, lines: 1 }))
   expect(parseSync({ incoming: many })?.incoming.length).toBe(10_000)
 })
 

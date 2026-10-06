@@ -26,6 +26,7 @@ export const withGiveUp =
 
 export type Reply<T> = { ok: true; data: T } | { ok: false; status: number; error: string }
 
+// The server's cap on garbage in one log, so also the most a room can deliver.
 export const MAX_INCOMING = 10_000
 
 export const PROTOCOL_VERSION = 2
@@ -146,7 +147,7 @@ export function parseSync(data: unknown): SyncReply | null {
     ? data.incoming
         .slice(0, MAX_INCOMING)
         .filter(isRecord)
-        .filter(a => count(a.id) && Number.isInteger(a.lines) && (a.lines as number) >= 1 && (a.lines as number) <= 40)
+        .filter(a => count(a.id) && (a.id as number) >= 1 && Number.isInteger(a.lines) && (a.lines as number) >= 1 && (a.lines as number) <= 40)
         .map(a => ({ id: a.id as number, lines: a.lines as number }))
     : []
   const ended = isRecord(data.result)
@@ -156,11 +157,12 @@ export function parseSync(data: unknown): SyncReply | null {
 }
 
 // The server may redeliver a batch when a poll is retried; the id is the identity, so keep the first copy of each.
+// Stops at MAX_INCOMING: past that the log could not hold them anyway.
 export function mergeIncoming(have: readonly Incoming[], got: readonly Incoming[]): Incoming[] {
   const seen = new Set(have.map(a => a.id))
   const fresh = got.filter(a => !seen.has(a.id) && seen.add(a.id))
 
-  return [...have, ...fresh]
+  return [...have, ...fresh.slice(0, MAX_INCOMING - have.length)]
 }
 
 // Attacks go out in a payload with a seq. A failed send is retried with the same seq and the

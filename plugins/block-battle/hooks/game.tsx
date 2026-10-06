@@ -38,7 +38,8 @@ type Live = {
   isPaused: boolean
   fx: Fx
   overMs: number
-  applied: number[]
+  // How many of the room's incoming attacks were taken; the list only grows.
+  applied: number
   outbox: ClientMsg[]
   attacks: number[]
   syncMs: number
@@ -73,7 +74,7 @@ const emptyProps = (): GameView => ({
 const newLive = (props: GameView): Live => ({
   props, rev: 0, screen: 'menu', menu: 0, mode: 'marathon', game: null, inputs: [], t: 0,
   pace: newPace(), rec: newRecorder(), gameId: null, nonce: 0, waitMs: 0, uploads: [], sender: newSender(), hasSentLog: false,
-  isPaused: false, fx: emptyFx(), overMs: 0, applied: [], outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
+  isPaused: false, fx: emptyFx(), overMs: 0, applied: 0, outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
   hasPostedOver: false, result: null, isDirty: true, hasKeyed: false, pick: 0, typing: null, typeError: null,
 })
 
@@ -317,7 +318,7 @@ function tick(live: Live) {
   const p = live.props
   if (live.screen === 'lobby' && p.battle.status === 'matched' && p.battle.roomId !== null && p.battle.roomId !== live.roomId) {
     live.roomId = p.battle.roomId
-    live.applied = []
+    live.applied = 0
     live.gameId = null
     startGame(live, 'battle', p.battle.seed)
   }
@@ -347,9 +348,9 @@ function tick(live: Live) {
     if (live.mode === 'battle' && live.roomId === p.battle.roomId) {
       let g = game
       if (!g.isOver && !live.result) {
-        for (const inc of p.battle.incoming) {
-          if (live.applied.includes(inc.id)) continue
-          live.applied.push(inc.id)
+        const { incoming } = p.battle
+        for (; live.applied < incoming.length; live.applied++) {
+          const inc = incoming[live.applied]!
           recordGarbage(live.rec, inc.id)
           g = receiveGarbage(g, inc.lines)
           dirty = true
