@@ -66,8 +66,8 @@ const rt: {
   base: string
   home: string
   hasLoadedLast: boolean
-  // Our server's session key. The GitHub token is never kept: it is exchanged and dropped.
-  session: Session | null
+  // Our server's session key, with the server it belongs to. The GitHub token is never kept: it is exchanged and dropped.
+  session: { base: string; s: Session } | null
   signIn: Timer | null
   isSigningIn: boolean
   // Bumped when the pane closes so a flow still waiting on a request stops when it resumes.
@@ -132,12 +132,16 @@ function noticeFor(r: { status: number; error: string }): string {
   return `Server said: ${r.error}`
 }
 
-async function loadSession($: EngineInterface): Promise<Session | null> {
-  if (rt.session) return rt.session
-  rt.session = parseSession(await $.store.get(sessionKey(rt.base)))
-  if (rt.session) await setView($, { me: rt.session.login })
+// The server can change while the store answers, so the session is only ever returned for the base it was read for.
+async function loadSession($: EngineInterface, base = rt.base): Promise<Session | null> {
+  if (rt.session?.base === base) return rt.session.s
+  const s = parseSession(await $.store.get(sessionKey(base)))
+  if (s && base === rt.base) {
+    rt.session = { base, s }
+    await setView($, { me: s.login })
+  }
 
-  return rt.session
+  return s
 }
 
 function stopSignIn() {
@@ -166,21 +170,22 @@ async function loadLast($: EngineInterface) {
   if (typeof last === 'string' && serverUrlOk(last)) await update($, view, v => ({ ...v, servers: { ...v.servers, last } }))
 }
 
-async function dropSession($: EngineInterface) {
-  rt.session = null
-  await $.store.delete(sessionKey(rt.base))
-  await setView($, { me: null })
+async function dropSession($: EngineInterface, base: string) {
+  if (rt.session?.base === base) rt.session = null
+  await $.store.delete(sessionKey(base))
+  if (base === rt.base) await setView($, { me: null })
 }
 
 async function signOut($: EngineInterface): Promise<string> {
-  const s = await loadSession($)
+  const base = rt.base
+  const s = await loadSession($, base)
   if (s === null) return 'Not signed in to this server.'
-  if (serverUrlOk(rt.base)) {
-    await call((url, init) => $.http.fetch(url, init), rt.base, 'DELETE', '/v1/session', s.session, undefined, signal =>
+  if (serverUrlOk(base)) {
+    await call((url, init) => $.http.fetch(url, init), base, 'DELETE', '/v1/session', s.session, undefined, signal =>
       $.clock.sleep(TIMEOUT_MS, { signal }),
     )
   }
-  await dropSession($)
+  await dropSession($, base)
 
   return 'Signed out of Block Battle.'
 }
@@ -188,6 +193,7 @@ async function signOut($: EngineInterface): Promise<string> {
 async function startSignIn($: EngineInterface) {
   if (rt.isSigningIn) return
   rt.isSigningIn = true
+  const base = rt.base
   const gen = ++rt.signInGen
   const live = () => gen === rt.signInGen
   const end = (notice: string) => {
@@ -201,7 +207,7 @@ async function startSignIn($: EngineInterface) {
   const fetch = (url: string, init?: HttpInit) => $.http.fetch(url, init)
   const giveUp = (signal: AbortSignal) => $.clock.sleep(TIMEOUT_MS, { signal })
   try {
-    const config = await call(fetch, rt.base, 'GET', '/v1/config', null, undefined, giveUp)
+    const config = await call(fetch, base, 'GET', '/v1/config', null, undefined, giveUp)
     if (!live()) return
     if (!config.ok) return end(noticeFor(config))
     const clientId = parseConfig(config.data)
@@ -227,12 +233,13 @@ async function startSignIn($: EngineInterface) {
         }
         if (poll.kind === 'failed') return end(poll.reason === 'error' ? NO_GITHUB : CANCELLED)
         await setView($, { notice: SIGNING_IN })
-        const r = await call(fetch, rt.base, 'POST', '/v1/session', null, { githubToken: poll.token }, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
+        if (!live()) return
+        const r = await call(fetch, base, 'POST', '/v1/session', null, { githubToken: poll.token }, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
         if (!live()) return
         const s = r.ok ? parseSession(r.data) : null
         if (!s) return end(r.ok ? DOWN : noticeFor(r))
-        rt.session = s
-        await $.store.set(sessionKey(rt.base), s)
+        rt.session = { base, s }
+        await $.store.set(sessionKey(base), s)
         await setView($, { me: s.login })
         await end(`Signed in as ${s.login}.`)
         void prefetchBest($)
@@ -249,18 +256,14 @@ async function startSignIn($: EngineInterface) {
 // A server other than the active one is only called with its own stored session, never with a sign-in.
 async function api($: EngineInterface, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, base = rt.base): Promise<Reply<unknown>> {
   if (!serverUrlOk(base)) return { ok: false, status: -2, error: BAD_URL }
-  const isActive = base === rt.base
-  const s = isActive ? await loadSession($) : parseSession(await $.store.get(sessionKey(base)))
+  const s = await loadSession($, base)
   if (s === null) {
-    if (!isActive) return { ok: false, status: -1, error: SIGNED_OUT }
+    if (base !== rt.base) return { ok: false, status: -1, error: SIGNED_OUT }
     void startSignIn($)
     return { ok: false, status: -1, error: rt.signInLine ?? SIGNING_IN }
   }
   const reply = await call((url, init) => $.http.fetch(url, init), base, method, path, s.session, body, signal => $.clock.sleep(TIMEOUT_MS, { signal }))
-  if (!reply.ok && reply.status === 401) {
-    if (base === rt.base) await dropSession($)
-    else await $.store.delete(sessionKey(base))
-  }
+  if (!reply.ok && reply.status === 401) await dropSession($, base)
 
   return reply
 }
@@ -284,10 +287,11 @@ async function loadLeaderboard($: EngineInterface) {
 // For the menu's Marathon best only: it never touches the notice line, which a slow reply
 // would otherwise overwrite after the person has moved on (a matchmaking error, say).
 async function prefetchBest($: EngineInterface) {
-  if ((await loadSession($)) === null) return
-  const r = await api($, 'GET', '/v1/leaderboard')
+  const base = rt.base
+  if ((await loadSession($, base)) === null) return
+  const r = await api($, 'GET', '/v1/leaderboard', undefined, base)
   const board = r.ok ? parseLeaderboard(r.data) : null
-  if (board) await setView($, { leaderboard: board })
+  if (board && base === rt.base) await setView($, { leaderboard: board })
 }
 
 function stopQueue() {
@@ -317,7 +321,13 @@ async function pollQueue($: EngineInterface, startedAt: number) {
 
       return
     }
-    const r = await api($, 'POST', '/v1/battle/queue')
+    const base = rt.base
+    const r = await api($, 'POST', '/v1/battle/queue', undefined, base)
+    if (base !== rt.base) {
+      if (r.ok) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
+
+      return
+    }
     if (!r.ok) {
       stopQueue()
       if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue')
@@ -330,7 +340,7 @@ async function pollQueue($: EngineInterface, startedAt: number) {
     if (q?.status === 'matched' && rt.queueTimer !== null) {
       stopQueue()
       rt.opponentLogin = q.opponent
-      rt.rooms = [...rt.rooms, { key: q.roomId, base: rt.base }].slice(-8)
+      rt.rooms = [...rt.rooms, { key: q.roomId, base }].slice(-8)
       rt.lastSyncOk = await $.clock.now()
       // Room for the big board and the opponent's beside it; a width the person dragged still wins.
       $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
@@ -418,7 +428,7 @@ async function startMarathon($: EngineInterface, nonce: number) {
   let gameId: string | null = null
   let seed = 0
   const base = rt.base
-  if (serverUrlOk(base) && (await loadSession($)) !== null) {
+  if (serverUrlOk(base) && (await loadSession($, base)) !== null) {
     const r = await api($, 'POST', '/v1/marathon', undefined, base)
     const g = r.ok ? parseMarathonStart(r.data) : null
     if (g) {

@@ -892,6 +892,7 @@ async function typeText(ui: Ui, text: string) {
 }
 
 const ACME = 'https://games.acme.dev'
+const OFFICIAL_URL = 'https://games.jpoapps.com'
 const BOTH = { ...SIGNED_IN, ['session:' + ACME]: { session: 'acme_sess', login: 'alice' } }
 const MATCH = { status: 200, body: { status: 'waiting' } }
 
@@ -1055,4 +1056,97 @@ test('a log goes to the server that started the game, with that server\'s sessio
   const scores = seen.filter(r => r.url.endsWith('/v1/scores'))
   expect(scores).toHaveLength(1)
   expect(scores[0]).toMatchObject({ url: 'https://games.jpoapps.com/v1/scores', auth: 'Bearer sess_1' })
+})
+
+function slowStore(on: On, init: Record<string, unknown>, slowKey: string) {
+  const m = new Map(Object.entries(init))
+  let release = () => {}
+  let isHeld = false
+  on('store.get', async (_$, e) => {
+    if (e.key === slowKey && !isHeld) {
+      isHeld = true
+      await new Promise<void>(r => (release = r))
+    }
+    return { value: m.get(e.key) }
+  })
+  on('store.set', async (_$, e) => {
+    m.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('store.delete', async (_$, e) => {
+    m.delete(e.key)
+    return { value: undefined }
+  })
+  on('store.keys', async () => ({ value: [...m.keys()] }))
+
+  return { m, release: () => release() }
+}
+
+test('a session still loading for one server is never sent to the server picked meanwhile', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  const slow = slowStore(on, BOTH, 'session:https://games.jpoapps.com')
+  const seen: Seen[] = []
+  on('http.fetch', async (_$, e) => {
+    seen.push({ method: e.init?.method ?? 'GET', url: e.url, auth: e.init?.headers?.Authorization ?? '', body: undefined })
+    return { value: reply(new URL(e.url).pathname === '/v1/leaderboard' ? EMPTY_LEADERBOARD : MATCH.body) }
+  })
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'cg-block-battle', args: '' })
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await typeText(ui, ACME)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  slow.release()
+  for (let i = 0; i < 3; i++) {
+    await ui.advance(48)
+    await clock.advance(1_500)
+  }
+  await ui.advance(48)
+  const toAcme = seen.filter(r => r.url.startsWith(ACME))
+  expect(toAcme.length).toBeGreaterThan(1)
+  expect(toAcme.every(r => r.auth === 'Bearer acme_sess')).toBe(true)
+})
+
+test('a match found on a server the player has left is not played on the new one', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  store(on, BOTH)
+  const seen: Seen[] = []
+  let release = () => {}
+  let isHeld = false
+  on('http.fetch', async (_$, e) => {
+    seen.push({ method: e.init?.method ?? 'GET', url: e.url, auth: e.init?.headers?.Authorization ?? '', body: undefined })
+    const path = new URL(e.url).pathname
+    if (path === '/v1/battle/queue' && e.init?.method === 'POST' && e.url.startsWith(OFFICIAL_URL) && !isHeld) {
+      isHeld = true
+      await new Promise<void>(r => (release = r))
+      return { value: reply({ status: 'matched', roomId: 'r1', seed: 42, opponent: { login: 'bob' } }) }
+    }
+    return { value: reply(path === '/v1/battle/queue' ? MATCH.body : { opponent: OPPONENT, incoming: [] }) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await openPicker(ui)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.advance(48)
+  await ui.key({ key: 'q' })
+  await ui.advance(48)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await typeText(ui, ACME)
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  release()
+  for (let i = 0; i < 3; i++) {
+    await ui.advance(48)
+    await clock.advance(1_500)
+  }
+  for (let i = 0; i < 4; i++) await ui.advance(200)
+  expect(seen.some(r => r.url.startsWith(ACME + '/v1/battle/queue'))).toBe(true)
+  expect(seen.some(r => r.url.includes('/r1/'))).toBe(false)
 })
