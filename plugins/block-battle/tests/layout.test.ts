@@ -14,9 +14,11 @@ type Ui = Mounted<'terminal', 'Pane'>
 const SIZES = { big: { columns: 66, rows: 46 }, compact: { columns: 48, rows: 26 }, mini: { columns: 33, rows: 22 }, tiny: { columns: 20, rows: 10 } } as const
 type SizeName = keyof typeof SIZES
 
+const ROWS = [['bob', 61_250], ['alice', 75_000], ['carol', 90_000], ['dave', 120_000], ['erin', 3_723_450]].map(([login, ms]) => ({ login, ms, at: 1 }))
 const BOARD = {
   marathon: [{ login: 'bob', score: 91250, lines: 80, level: 9, at: 1 }, { login: 'alice', score: 40300, lines: 41, level: 5, at: 2 }, { login: 'carol', score: 1200, lines: 5, level: 1, at: 3 }],
   wins: [{ login: 'alice', wins: 12 }, { login: 'bob', wins: 3 }],
+  bot: { easy: ROWS, medium: ROWS, hard: ROWS },
 }
 function serve(on: On) {
   on('store.get', async (_$, e) => ({ value: e.key === 'session:https://games.jpoapps.com' ? { session: 's', login: 'alice' } : undefined }))
@@ -91,6 +93,16 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     await ui.key({ key: 'q' })
     await ui.advance(48)
     emit(`${size}-menu-top-score`, await screen(ui, size))
+  })
+
+  test(`${size}: the bot leaderboard page fits`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on)
+    const ui = await open($, size)
+    await toLeaderboard(ui)
+    await ui.key({ key: 'right' })
+    await ui.advance(48)
+    emit(`${size}-leaderboard-bot`, await screen(ui, size))
   })
 
   test(`${size}: the battle lobby fits`, async ($: Engine, on: On) => {

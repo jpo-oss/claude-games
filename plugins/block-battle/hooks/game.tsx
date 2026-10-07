@@ -1,7 +1,7 @@
 import type { ClientModule, ClientSurface, RenderChildren } from 'claude-code'
 
 import type { BotLevel, ClientMsg, GameView } from '../types'
-import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_MS, TIERS, TRAIL_MS, bigWord, blankRows, emptyFx, fieldRows, overStep, pickTier, previewRows, runs, snapshotRows, vsOverlay } from './draw'
+import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_MS, TIERS, TRAIL_MS, bigWord, blankRows, emptyFx, fieldRows, formatMs, overStep, pickTier, previewRows, runs, snapshotRows, vsOverlay } from './draw'
 import type { Ch, Fx, Label, Overlay, Size } from './draw'
 import { newGame, receiveGarbage, snapshot, step } from './engine'
 import type { Game, GameEvent, Input, Mode } from './engine'
@@ -345,6 +345,7 @@ function onKey(live: Live, key: string) {
   if (live.screen === 'lobby' || live.screen === 'leaderboard' || live.screen === 'starting') {
     if (k === 'q' || (k === 'return' && live.screen !== 'starting')) leave(live)
     else if (k === 'r' && live.screen === 'leaderboard') live.outbox.push({ type: 'menu', choice: 'leaderboard' })
+    else if ((k === 'left' || k === 'right') && live.screen === 'leaderboard') live.lbPage = live.lbPage === 0 ? 1 : 0
     live.isDirty = true
 
     return
@@ -906,50 +907,58 @@ function drawLobby(live: Live, surface: Surf) {
   )
 }
 
-type Entry = { login: string; value: number }
+type Entry = { login: string; value: string }
 
-function board(surface: Surf, title: string, empty: string, entries: Entry[], width: number, me: string | null) {
+function board(surface: Surf, title: string, empty: string, entries: Entry[], width: number, me: string | null, num = 7, framed = true) {
   const { Box, Text } = surface.elements
   const inner = width - 2
-  const num = 7
-
-  return panel(
-    surface,
-    width,
-    FRAME,
+  const body = (
     <Box flexDirection="column">
-      <Text bold color={TITLE}>{' ' + title}</Text>
+      <Text bold color={TITLE}>{(' ' + title).slice(0, inner)}</Text>
       {entries.length === 0 && <Text dimColor>{' ' + empty}</Text>}
       {entries.map((r, i) => {
         const mine = r.login === me
         const name = r.login.slice(0, Math.max(4, inner - num - 4))
-        const text = (` ${i + 1}  ${name}`.padEnd(inner - num) + String(r.value).padStart(num - 1) + ' ').slice(0, inner)
+        const text = (` ${i + 1}  ${name}`.padEnd(inner - num) + r.value.padStart(num - 1) + ' ').slice(0, inner)
 
         return <Text bold={mine} inverse={mine} color={mine ? 'yellow' : undefined}>{text}</Text>
       })}
-    </Box>,
+    </Box>
   )
+
+  return framed ? panel(surface, width, FRAME, body) : <Box flexDirection="column" width={width}>{body}</Box>
 }
 
 function drawLeaderboard(live: Live, surface: Surf) {
   const { Box, Text } = surface.elements
   const { leaderboard, notice, me } = live.props
-  const wide = surface.columns >= 62
-  const w = wide ? 30 : Math.min(36, Math.max(24, surface.columns - 2))
+  const cols = surface.columns
+  const isBot = live.lbPage === 1
+  const wide = cols >= (isBot ? 82 : 62)
+  const w = wide ? (isBot ? 26 : 30) : Math.min(36, Math.max(24, cols - 2))
+  // Three stacked boards fit a short pane only without their frames.
+  const framed = !isBot || wide || surface.rows >= 30
+  const boards = !leaderboard
+    ? null
+    : isBot
+      ? BOT_LEVELS.map(l => board(surface, l.name, 'no wins yet', leaderboard.bot[l.id].map(r => ({ login: r.login, value: formatMs(r.ms) })), w, me, 10, framed))
+      : [
+          board(surface, 'Marathon top 5', 'no scores yet', leaderboard.marathon.map(r => ({ login: r.login, value: String(r.score) })), w, me),
+          board(surface, 'Battle wins top 5', 'no wins yet', leaderboard.wins.map(r => ({ login: r.login, value: String(r.wins) })), w, me),
+        ]
 
   return (
     <Box flexDirection="column" alignItems="center" paddingX={1}>
       <Text bold color="cyan">LEADERBOARD</Text>
       <Text dimColor>{hostOf(live.props.servers.active)}</Text>
-      {leaderboard ? (
-        <Box flexDirection={wide ? 'row' : 'column'} gap={1}>
-          {board(surface, 'Marathon top 5', 'no scores yet', leaderboard.marathon.map(r => ({ login: r.login, value: r.score })), w, me)}
-          {board(surface, 'Battle wins top 5', 'no wins yet', leaderboard.wins.map(r => ({ login: r.login, value: r.wins })), w, me)}
+      {boards ? (
+        <Box flexDirection={wide ? 'row' : 'column'} gap={framed ? 1 : 0}>
+          {boards}
         </Box>
       ) : (
         <Text color={notice ? 'red' : undefined}>{notice ?? 'Loading...'}</Text>
       )}
-      <Text dimColor>r refreshes, q goes back</Text>
+      <Text dimColor>arrows page  r refresh  q back</Text>
     </Box>
   )
 }

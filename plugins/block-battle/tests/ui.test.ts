@@ -1598,3 +1598,55 @@ test('a ranked reply that comes after the match started unranked closes that gam
   for (let i = 0; i < 10; i++) await ui.advance(48)
   expect(bodies).toEqual([{ gameId: 'b9', log: { steps: 1, inputs: [] } }])
 })
+
+const BOT_BOARD = {
+  marathon: [],
+  wins: [],
+  bot: {
+    easy: [{ login: 'bob', ms: 62_500, at: 1 }, { login: 'alice', ms: 70_000, at: 2 }],
+    medium: [],
+    hard: [{ login: 'carol', ms: 3_723_450, at: 3 }],
+  },
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the leaderboard's second page shows the fastest wins per bot on ${surface}`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on, () => ({ status: 200, body: BOT_BOARD }))
+    const ui = await $.ui.mount(target(surface))
+    await openLeaderboard(ui)
+    expect(await shown(ui)).toContain('Marathon top 5')
+    await ui.key({ key: 'right' })
+    await ui.advance(32)
+    const text = await shown(ui)
+    for (const t of ['Merge Conflict (easy)', 'Hotfix in Prod (medium)', 'Deploy on Friday (hard)', '62:03.45']) expect(text).toContain(t)
+    expect(text).not.toContain('Marathon top 5')
+    expect(await labelled(ui, '1\\s+bob')).toMatch(/^\s*1\s+bob\s+1:02\.50\s*$/)
+    expect((await ui.find({ type: 'Text', text: /2\s+alice/, in: 'game' }))?.props.inverse).toBe(true)
+    await ui.key({ key: 'left' })
+    await ui.advance(32)
+    expect(await shown(ui)).toContain('Marathon top 5')
+  })
+}
+
+test('a server without bot rankings shows empty boards on the second page', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, () => ({ status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  await ui.key({ key: 'right' })
+  await ui.advance(32)
+  expect((await shown(ui)).match(/no wins yet/g) ?? []).toHaveLength(3)
+})
+
+test('the leaderboard opens on its first page every time', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, () => ({ status: 200, body: BOT_BOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  await ui.key({ key: 'right' })
+  await ui.key({ key: 'q' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('Marathon top 5')
+})
