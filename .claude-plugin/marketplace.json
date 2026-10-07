@@ -14,8 +14,8 @@
         "source": "git-subdir",
         "url": "jpo-oss/claude-games",
         "path": "plugins/block-battle",
-        "ref": "block-battle-v0.2.0",
-        "sha": "e97407f8d5719d2d611d9bfe118d1275908e159c"
+        "ref": "block-battle-v0.3.0",
+        "sha": "1619bef38b23d1717f8bcd623abc2305df8a0c02"
       },
       "description": "Falling-block puzzle with solo Marathon, a bot to beat, 1v1 battles and a leaderboard"
     }
