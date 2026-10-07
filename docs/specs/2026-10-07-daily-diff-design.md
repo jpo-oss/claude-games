@@ -79,7 +79,7 @@ Routes, all needing a signed-in session:
 |---|---|
 | `GET /v1/daily-diff/today` | Starts today's game if needed and returns `{ number, day, endsAt, guesses: [{ word, marks }], state, answer? }`. `state` is `playing`, `won` or `lost`. `marks` is five characters from `g`, `y`, `x`. |
 | `POST /v1/daily-diff/guess` | Body `{ number, word }`. Returns the marks and the new state, plus the answer once the game ends. 422 for a word not in the list, 409 if `number` isn't today's puzzle or the game is over. |
-| `GET /v1/daily-diff/leaderboard?period=today\|week\|month\|all` | `{ rows: [{ rank, login, points, played, ms }], you? }`. For `today`, `points` is replaced by `guesses`. |
+| `GET /v1/daily-diff/leaderboard/:period` (period is one of today\|week\|month\|all) | `{ rows: [{ rank, login, points, played, ms }], you? }`. For `today`, `points` is replaced by `guesses`. |
 | `GET /v1/daily-diff/stats` | `{ played, won, streak, bestStreak, distribution: [n1..n6] }` |
 
 The guess route has its own rate limit so the word list can't be scraped by sending every word.

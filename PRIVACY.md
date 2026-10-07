@@ -9,6 +9,7 @@ When you sign in and play online, the server stores:
 - Your GitHub login (username), numeric GitHub ID and the date your GitHub account was created.
 - A hash of each session key. The key itself stays on your machine.
 - Your scores and results: Marathon scores, 1v1 battle results and Vs Bot results.
+- For Daily Diff: each day's guesses, when you started and finished, and whether you solved it. The plugin ships no word list or answers.
 
 The server log has one line per request: method, route, status, your login and how long it took. If a request fails, it also logs the type of error, never the message.
 
@@ -34,7 +35,7 @@ On a server in Germany, behind Cloudflare. Traffic passes through Cloudflare, wh
 
 ## How long we keep it
 
-- Your player record, scores and battle results are kept until you ask us to delete them. The server never deletes them on its own.
+- Your player record, scores, battle results and Daily Diff history are kept until you ask us to delete them. The server never deletes them on its own.
 - A session stops working after 30 days without use. Signing out deletes it right away.
 
 ## Signing out

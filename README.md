@@ -59,6 +59,12 @@ To sign out of the server you're on:
 /cg-block-battle signout
 ```
 
+### Daily Diff
+
+A daily five-letter coding word puzzle. Everyone gets the same word each day and has six guesses. Streaks and a leaderboard keep score.
+
+Run `/cg-daily-diff` and click the pane to start. It needs the same one-time GitHub sign-in as Block Battle, with no permissions asked. Install it with `/plugin install daily-diff@claude-games`.
+
 ## Choosing a server
 
 When you pick Battle, the game asks where to play: the official server, or a server address you type in. It remembers the last address you typed. Servers other than the official one are run by someone else, and the game says so before you sign in to one.
