@@ -6,6 +6,7 @@ export type Leaderboard = { marathon: ScoreRow[]; wins: WinRow[]; bot: Record<Bo
 
 export type Incoming = { id: number; lines: number }
 export type Opponent = { login: string; snapshot: string; isOver: boolean }
+export type Online = { playing: number; looking: number }
 
 export type Battle = {
   status: 'idle' | 'queueing' | 'matched' | 'ended'
@@ -15,6 +16,8 @@ export type Battle = {
   // Every attack received this match, by server id; the Client applies each id once.
   incoming: Incoming[]
   result: 'win' | 'loss' | null
+  // Server-wide counts from the latest queue reply of this search; null until one carries them.
+  online: Online | null
 }
 
 export type GameView = {

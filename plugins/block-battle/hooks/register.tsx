@@ -28,7 +28,7 @@ const NUDGE_RETRY_MS = 10_000
 const QUEUE_POLL_MS = 1_500
 const QUEUE_GIVE_UP_MS = 120_000
 
-export const idleBattle = (): Battle => ({ status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null })
+export const idleBattle = (): Battle => ({ status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null, online: null })
 const OFFICIAL = 'https://games.jpoapps.com'
 const LAST_SERVER = 'lastServer'
 const startView = (): GameView => ({
@@ -357,6 +357,7 @@ async function resetBattle($: EngineInterface, isLeaving: boolean): Promise<numb
   rt.latest = { snapshot: '', isOver: false }
   rt.opponentLogin = ''
   rt.myLogin = ''
+  await setBattleIf($, gen, { online: null })
   if (isLeaving && wasQueueing) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
   if (!isLive(gen)) return null
   await setBattleIf($, gen, idleBattle())
@@ -385,6 +386,7 @@ async function pollQueue($: EngineInterface, startedAt: number, gen: number) {
     if (!r.ok) {
       if (r.status === 409) return
       const stopped = bump()
+      await setBattleIf($, stopped, { online: null })
       if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
       await setBattleIf($, stopped, idleBattle())
       await setViewIf($, stopped, { notice: fail(r) })
@@ -392,6 +394,7 @@ async function pollQueue($: EngineInterface, startedAt: number, gen: number) {
       return
     }
     const q = parseQueue(r.data)
+    if (q?.status === 'waiting') await setBattleIf($, gen, { online: q.online })
     if (q?.status !== 'matched' || login === null) return
     const matchedAt = await $.clock.now()
     if (!live()) return
@@ -409,6 +412,7 @@ async function pollQueue($: EngineInterface, startedAt: number, gen: number) {
       opponent: { login: q.opponent, snapshot: '', isOver: false },
       incoming: [],
       result: null,
+      online: null,
     })
   } finally {
     if (rt.polling === gen) rt.polling = null
@@ -419,7 +423,7 @@ async function startQueue($: EngineInterface) {
   const gen = bump()
   await setViewIf($, gen, { notice: null })
   if (!isLive(gen)) return
-  await setBattleIf($, gen, { status: 'queueing' })
+  await setBattleIf($, gen, { status: 'queueing', online: null })
   if (!isLive(gen)) return
   const startedAt = await $.clock.now()
   if (!isLive(gen)) return

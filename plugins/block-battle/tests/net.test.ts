@@ -107,9 +107,9 @@ test('the server reply is read as the room sends it', () => {
 })
 
 test('queue replies: waiting, matched, and junk', () => {
-  expect(parseQueue({ status: 'waiting' })).toEqual({ status: 'waiting' })
+  expect(parseQueue({ status: 'waiting' })).toEqual({ status: 'waiting', online: null })
   expect(parseQueue({ status: 'matched', roomId: 'r1', seed: 7, opponent: { login: 'bob', avatar: 'u' } })).toEqual({
-    status: 'matched', roomId: 'r1', seed: 7, opponent: 'bob',
+    status: 'matched', roomId: 'r1', seed: 7, opponent: 'bob', online: null,
   })
   expect(parseQueue({ status: 'matched', roomId: 'r1' })).toBe(null)
   expect(parseQueue(null)).toBe(null)
@@ -159,6 +159,16 @@ test('leaderboard rows with bad logins or numbers are dropped', () => {
   })
   expect(b?.marathon.map(r => r.login)).toEqual(['fine'])
   expect(b?.wins).toEqual([])
+})
+
+test('queue replies carry online counts only when they are whole numbers', () => {
+  const waiting = (online: unknown) => parseQueue({ status: 'waiting', online })?.online
+  expect(waiting({ playing: 2, looking: 1, names: ['bob'] })).toEqual({ playing: 2, looking: 1 })
+  expect(waiting({ playing: 0, looking: 0 })).toEqual({ playing: 0, looking: 0 })
+  expect(waiting({ playing: 1e12, looking: 3 })).toEqual({ playing: 100_000, looking: 3 })
+  for (const bad of [null, 'lots', [], { playing: 2 }, { playing: -1, looking: 0 }, { playing: 1.5, looking: 0 }, { playing: '2', looking: 1 }, { playing: Infinity, looking: 0 }, { playing: NaN, looking: 0 }])
+    expect(waiting(bad)).toBe(null)
+  expect(parseQueue({ status: 'matched', roomId: 'r1', seed: 7, opponent: { login: 'bob' }, online: { playing: 4, looking: 0 } })?.online).toEqual({ playing: 4, looking: 0 })
 })
 
 test('a queue match needs a safe room id and login', () => {
