@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock, Mounted } from 'claude-code/testing'
 
 import { reply, server, store } from './fake'
+import { screen } from './screen'
 
 const SIGNED_IN = { 'session:https://games.jpoapps.com': { session: 's', login: 'alice' } }
 const PANE = { title: 'Daily Diff', isFocused: true, bodyColumns: 60, placement: 'inline' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
@@ -13,6 +14,8 @@ const run = { command: 'cg-daily-diff', args: '', origin: { kind: 'composer' as 
 type Ui = Mounted<'terminal' | 'desktop', 'Pane'>
 
 const shown = async (ui: Ui) => JSON.stringify(await ui.drawn({ in: 'game' }))
+const lines = async (ui: Ui) => screen(await ui.drawn({ in: 'game' }))
+const lineOf = (all: string[], text: string) => all.findIndex(l => l.includes(text))
 
 // Every string under a node, in order: a tile row's letters read as one word.
 const textOf = (node: unknown): string => {
@@ -49,6 +52,7 @@ async function press(ui: Ui, clock: MockClock, ...keys: string[]) {
 const typeWord = (ui: Ui, clock: MockClock, word: string) => press(ui, clock, ...word, 'return')
 const short = (ui: Ui) => ui.resize({ columns: 60, rows: 20, in: 'game' })
 const player = (rank: number, login: string) => ({ rank, login, points: null, guesses: 3, played: 1, ms: 5000 })
+const GRAY = '#6a6a6c'
 const todayFetches = (seen: { url: string }[]) => seen.filter(r => r.url.endsWith('/v1/daily-diff/today')).length
 
 for (const surface of ['terminal', 'desktop'] as const) {
@@ -272,5 +276,62 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const text = await shown(ui)
     expect(text).toContain('bigger')
     expect(text).not.toContain('ENTER')
+  })
+
+  test(`finished rows read as words, spaced apart when there is room, on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui } = await open($, on, surface)
+    await typeWord(ui, clock, 'zzzza')
+    await typeWord(ui, clock, 'qqqqa')
+    await ui.resize({ columns: 60, rows: 40, in: 'game' })
+    let all = await lines(ui)
+    expect(lineOf(all, ' Z  Z  Z  Z  A ')).toBeGreaterThan(-1)
+    expect(lineOf(all, ' Q  Q  Q  Q  A ') - lineOf(all, ' Z  Z  Z  Z  A ')).toBe(2)
+    await short(ui)
+    all = await lines(ui)
+    expect(lineOf(all, ' Q  Q  Q  Q  A ') - lineOf(all, ' Z  Z  Z  Z  A ')).toBe(1)
+  })
+
+  test(`a wide, short pane draws full tiles beside the results on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui } = await open($, on, surface)
+    await typeWord(ui, clock, 'zzzza')
+    await typeWord(ui, clock, 'qqqqa')
+    await ui.resize({ columns: 84, rows: 20, in: 'game' })
+    const all = await lines(ui)
+    expect(all.length).toBeLessThanOrEqual(20)
+    const tiles = (await ui.find({ key: 'row-0', in: 'game' }))?.children as { props: { borderStyle?: string } }[]
+    expect(tiles.map(t => t.props.borderStyle)).toEqual(Array(5).fill('round'))
+    expect(all[lineOf(all, 'Solved in 2/6')]).toMatch(/^\s*╭/)
+    expect(all[lineOf(all, 'Played 1')]).toMatch(/│ Z ││ Z │/)
+    expect(all[lineOf(all, 'alice')]).toMatch(/^\s*[│╭╰]/)
+    expect(lineOf(all, 's share')).toBeGreaterThan(-1)
+    await ui.resize({ columns: 70, rows: 20, in: 'game' })
+    expect(lineOf(await lines(ui), ' Z  Z  Z  Z  A ')).toBeGreaterThan(-1)
+  })
+
+  test(`a missed letter is a gray that stands out from the pane on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui } = await open($, on, surface)
+    await typeWord(ui, clock, 'zzzza')
+    const tile = (await ui.find({ key: 'row-0', in: 'game' }))?.children[0] as { props: { backgroundColor?: string } }
+    expect(tile.props.backgroundColor).toBe(GRAY)
+    expect((await ui.find({ type: 'Text', text: ' Z ', in: 'game' }))?.props.backgroundColor).toBe(GRAY)
+    await typeWord(ui, clock, 'qqqqa')
+    const cell = (await ui.find({ key: 'row-0', in: 'game' }))?.children[0] as { props: { backgroundColor?: string } }
+    expect(cell.props.backgroundColor).toBe(GRAY)
+  })
+
+  test(`a failed game shows X on today's board on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui } = await open($, on, surface, { rows: [{ ...player(1, 'alice'), guesses: null }] })
+    for (let i = 0; i < 6; i++) await typeWord(ui, clock, 'zzzza')
+    expect((await ui.find({ type: 'Text', text: /alice/, in: 'game' }))?.text).toMatch(/ X +1$/)
+  })
+
+  test(`a count of 0 in the distribution draws no bar on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui } = await open($, on, surface)
+    await typeWord(ui, clock, 'qqqqa')
+    const bars = await ui.findAll({ type: 'Text', text: /█/, in: 'game' })
+    expect(bars).toHaveLength(1)
+    expect(bars[0]?.props.color).toBe('#538d4e')
+    const all = await lines(ui)
+    for (let i = 2; i <= 6; i++) expect(all.some(l => l.trim().endsWith(`${i} 0`))).toBe(true)
   })
 }

@@ -1,6 +1,6 @@
 {
   "name": "daily-diff",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A daily five-letter coding word puzzle inside Claude Code, with streaks and a leaderboard",
   "author": { "name": "JustPressOne Inc." },
   "license": "MIT",
