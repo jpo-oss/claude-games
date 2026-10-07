@@ -1,6 +1,6 @@
 # claude-games
 
-Games to play inside [Claude Code](https://code.claude.com) while it works on something long. Real-time, online, against other people.
+Games to play inside [Claude Code](https://code.claude.com) while it works on something long: a falling-block game with online battles, and a daily coding word puzzle.
 
 They run as Claude Code mods.
 
@@ -12,7 +12,10 @@ In a Claude Code session:
 
 ```
 /plugin install block-battle --marketplace jpo-oss/claude-games
+/plugin install daily-diff --marketplace jpo-oss/claude-games
 ```
+
+Install one or both.
 
 Claude Code shows what the game adds and asks where to install it. Pick "Install for you" to have it in every project on this machine. If the command doesn't show up right away, run `/reload-plugins` or start a new session.
 
@@ -21,6 +24,7 @@ If you'd rather add the marketplace once and pick games from it:
 ```
 /plugin marketplace add jpo-oss/claude-games
 /plugin install block-battle@claude-games
+/plugin install daily-diff@claude-games
 ```
 
 In the desktop app you can also click **+** next to the prompt box, then **Plugins**, then **Add plugin**, once the marketplace is added.
@@ -31,6 +35,7 @@ Auto-update is off by default for this marketplace. Turn it on with `/plugin`, *
 
 ```
 claude plugin update block-battle@claude-games
+claude plugin update daily-diff@claude-games
 ```
 
 If a game says it's out of date, the server has moved on and you need the update to keep playing online.
@@ -39,6 +44,7 @@ If a game says it's out of date, the server has moved on and you need the update
 
 ```
 claude plugin uninstall block-battle@claude-games
+claude plugin uninstall daily-diff@claude-games
 ```
 
 ## Games
@@ -59,19 +65,27 @@ To sign out of the server you're on:
 /cg-block-battle signout
 ```
 
-### Daily Diff
-
-A daily five-letter coding word puzzle. Everyone gets the same word each day and has six guesses. Streaks and a leaderboard keep score.
-
-Run `/cg-daily-diff` and click the pane to start. It needs the same one-time GitHub sign-in as Block Battle, with no permissions asked. Install it with `/plugin install daily-diff@claude-games`.
-
-## Choosing a server
+#### Choosing a server
 
 When you pick Battle, the game asks where to play: the official server, or a server address you type in. It remembers the last address you typed. Servers other than the official one are run by someone else, and the game says so before you sign in to one.
 
 Each server has its own players and leaderboard. Signing in to one server doesn't sign you in to another, and your sign-in for one is never sent to another.
 
 Want to run your own? See [claude-games-server](https://github.com/jpo-oss/claude-games-server).
+
+### Daily Diff
+
+A daily five-letter coding word puzzle. Everyone gets the same word each day and has six guesses. Streaks and a leaderboard keep score.
+
+Run `/cg-daily-diff` and click the pane to start. Type a word and press Enter. Green is the right letter in the right spot, yellow is in the word somewhere else, gray isn't in the word. A new puzzle starts at 00:00 UTC, and a game you haven't finished by then counts as a loss.
+
+When you finish you see the answer, your streak and how many guesses your wins usually take, plus the top 20 for today, this week, this month and all time. Press s to copy a spoiler-free result to paste in chat.
+
+Playing needs a one-time GitHub sign-in, the same kind as Block Battle with no permissions asked. Each game keeps its own sign-in, so Daily Diff asks once even if you already signed in to Block Battle. To sign out:
+
+```
+/cg-daily-diff signout
+```
 
 ## A note on trust
 
