@@ -22,7 +22,7 @@ import {
 test('a GET carries the session, the protocol version and no body; trailing slashes go', () => {
   expect(buildRequest('https://games.example/', 'GET', '/v1/leaderboard', 'tok')).toEqual({
     url: 'https://games.example/v1/leaderboard',
-    init: { method: 'GET', headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '2' } },
+    init: { method: 'GET', headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '3' } },
   })
 })
 
@@ -31,7 +31,7 @@ test('a POST sends JSON with a content type', () => {
     url: 'http://localhost:8787/v1/scores',
     init: {
       method: 'POST',
-      headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '2', 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer tok', Accept: 'application/json', 'X-Protocol-Version': '3', 'Content-Type': 'application/json' },
       body: '{"mode":"marathon","score":5}',
     },
   })
@@ -40,7 +40,7 @@ test('a POST sends JSON with a content type', () => {
 test('a request without a session has no Authorization header', () => {
   expect(buildRequest('https://games.example', 'POST', '/v1/session', null, { githubToken: 'gho_x' }).init.headers).toEqual({
     Accept: 'application/json',
-    'X-Protocol-Version': '2',
+    'X-Protocol-Version': '3',
     'Content-Type': 'application/json',
   })
 })
@@ -203,8 +203,8 @@ test('an answered request cancels its give-up timer', async () => {
   expect(aborted).toBe(true)
 })
 
-test('protocol 2 header', () => {
-  expect(buildRequest('https://x.example', 'GET', '/v1/leaderboard', null).init.headers?.['X-Protocol-Version']).toBe('2')
+test('protocol 3 header', () => {
+  expect(buildRequest('https://x.example', 'GET', '/v1/leaderboard', null).init.headers?.['X-Protocol-Version']).toBe('3')
 })
 
 test('parseClientMsg: marathon carries a nonce, gameOver is gone', () => {

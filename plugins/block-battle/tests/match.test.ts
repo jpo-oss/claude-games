@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { botInputs, botSaw, newBot } from '../hooks/bot'
+import { TUNING, botInputs, botSaw, newBot } from '../hooks/bot'
 import type { Level } from '../hooks/bot'
 import { snapshot } from '../hooks/engine'
 import type { Cell, Game, Input } from '../hooks/engine'
@@ -71,6 +71,15 @@ test('only the bot topping out is a win for the player', () => {
   m.bot = doomed(m.bot)
   stepMatch(m, [])
   expect(m.winner).toBe('me')
+})
+
+test('the bot board is held at its top speed and the player board is not', () => {
+  const m = newMatch(1, 'medium')
+  m.me = { ...m.me, level: 15 }
+  m.bot = { ...m.bot, level: 15 }
+  stepMatch(m, [])
+  expect(m.bot.level).toBe(TUNING.medium.top)
+  expect(m.me.level).toBe(15)
 })
 
 test('a double the player clears lands in the bot pending garbage', () => {
