@@ -29,7 +29,7 @@ export type Reply<T> = { ok: true; data: T } | { ok: false; status: number; erro
 // The server's cap on garbage in one log, so also the most a room can deliver.
 export const MAX_INCOMING = 10_000
 
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 const KEY = /^[A-Za-z0-9_-]{1,64}$/
 // 200,000 input pairs and 10,000 garbage pairs, the server's caps.
 const MAX_STREAM = 420_000

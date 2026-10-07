@@ -26,11 +26,13 @@ The bot lives in `plugins/block-battle/hooks/bot.ts`, imported by the Client. It
 
 Each time the bot gets a new piece it scores every reachable final placement (each rotation and column, dropped straight down) by the board it leaves: aggregate height, holes, bumpiness and lines cleared, with fixed weights. It then plays the moves for the best one at its own pace.
 
-| | Pace | Considers | Mistakes |
-|---|---|---|---|
-| easy | one input every 12 steps | current piece | 30% of pieces take a random placement from the top 5 |
-| medium | one input every 5 steps | current piece and hold | 5% of pieces take the second best |
-| hard | one input every 3 steps | current and next piece | none |
+| | Pace | Considers | Mistakes | Top speed |
+|---|---|---|---|---|
+| easy | one input every 12 steps | current piece | 30% of pieces take a random placement from the top 5 | level 5 |
+| medium | one input every 5 steps | current piece and hold | 5% of pieces take the second best | level 8 |
+| hard | one input every 3 steps | current and next piece | none | level 10 |
+
+The bot's board stops speeding up at its top speed. Without it the bot's own line clears pushed it to level 15, where pieces fall faster than it can steer them, and every level topped out by itself within a few minutes. The cap is applied in `match.ts` after each step, so the server's replay does the same. The player's board is never capped.
 
 The bot also spreads its search over steps, 64 placements a step.
 
@@ -55,7 +57,7 @@ The flow matches ranked Marathon.
 3. The server replays the whole match with the same step loop: the player's board from the log, the bot from its own copy of `bot.ts`. It records the winner and the step count. It applies Marathon's checks: not faster than real time (5 s slack), at most 450,000 steps, nothing logged after the match ended, one submission per game.
 4. A win ranks by fewest steps. Each player's best win per level counts, top 5 per level, with the same 30-day account age rule as the other boards.
 
-`GET /v1/leaderboard` and the score replies gain a `bot` field: `{ easy: Row[], medium: Row[], hard: Row[] }`, where a row is `{ login, ms, at }` and `ms` is steps times 16. Older games ignore the field. The protocol version stays at 2 because nothing existing changes.
+`GET /v1/leaderboard` and the score replies gain a `bot` field: `{ easy: Row[], medium: Row[], hard: Row[] }`, where a row is `{ login, ms, at }` and `ms` is steps times 16. Older games ignore the field. Game 0.3.0 capped the bot's speed, which changes replays, so it moved to protocol 3 and 0.2.0 games are told to update.
 
 The server keeps a byte-identical copy of `bot.ts` next to its engine copy. `npm run check-engine` checks both against the game release in `ENGINE_REF`.
 
