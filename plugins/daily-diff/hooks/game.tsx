@@ -17,9 +17,12 @@ const KEYS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM']
 const BAR_W = 20
 const LOGIN_W = 20
 
-// Smallest regions each screen fits in, measured from the layouts below.
-const PLAY_MIN = { columns: 44, rows: 30 }
-const DONE_MIN = { columns: 58, rows: 37 }
+const WIDE = 57
+const MIN_COLUMNS = 44
+// Rows each layout below takes, gaps included. A notice adds two more.
+const PLAY_ROWS = 27
+const SMALL_PLAY_ROWS = 14
+const DONE_ROWS = 18
 
 type Live = {
   props: View
@@ -32,6 +35,11 @@ type Live = {
   // Puzzle number and guess count, so a new guess or a new puzzle clears the typing.
   seenGuesses: string
   seenPeriod: Period | null
+  // props.now and the frame time it arrived at: the engine's time now is props.now plus the frames since.
+  seenNow: number
+  nowAt: number
+  // Puzzle number whose countdown already asked for the next one.
+  askedNext: number
 }
 type Shell = { live: Live; rev: number }
 type Surf = ClientSurface<Shell>
@@ -51,6 +59,7 @@ function onKey(live: Live, key: string, post: (m: ClientMsg) => void) {
       live.tab = (live.tab + (k === 'left' ? PERIODS.length - 1 : 1)) % PERIODS.length
       post({ type: 'board', period: PERIODS[live.tab]! })
     } else if (k === 's') post({ type: 'share' })
+    else if (k === 'r') post({ type: 'retry' })
 
     return
   }
@@ -61,6 +70,7 @@ function onKey(live: Live, key: string, post: (m: ClientMsg) => void) {
 }
 
 const guessKey = (t: Today | null) => `${t?.number}:${t?.guesses.length}`
+const timeLeft = (live: Live, t: Today) => t.endsAt - (live.props.now + live.t - live.nowAt)
 
 // Picks up what changed in the props since the last call: a new guess clears the typing, a rejection
 // flashes, and the tab follows the board the hooks show (they only ever show the one asked for last).
@@ -75,6 +85,10 @@ function sync(live: Live, props: View) {
   if (period !== live.seenPeriod) {
     live.seenPeriod = period
     if (period) live.tab = PERIODS.indexOf(period)
+  }
+  if (props.now !== live.seenNow) {
+    live.seenNow = props.now
+    live.nowAt = live.t
   }
   if (props.rejected !== live.seenRejected) {
     live.seenRejected = props.rejected
@@ -118,24 +132,32 @@ function grid(live: Live, s: Surf, today: Today) {
   return <Box flexDirection="column">{rows}</Box>
 }
 
-// One cell per letter, so the finished screen keeps room for the board.
-function smallGrid(s: Surf, today: Today) {
+// One row per guess, for the finished screen and for short panes.
+function smallGrid(live: Live, s: Surf, today: Today) {
   const { Box, Text } = s.elements
+  const flash = live.t < live.flashUntil
+  const isPlaying = today.state === 'playing'
 
   return (
     <Box flexDirection="column">
       {[0, 1, 2, 3, 4, 5].map(i => {
         const g = today.guesses[i]
+        const isTyping = isPlaying && i === today.guesses.length
 
         return (
           <Box key={`row-${i}`} flexDirection="row" gap={1}>
-            {[0, 1, 2, 3, 4].map(j =>
-              g ? (
-                <Text bold color="white" backgroundColor={MARK[g.marks[j]!]}>{` ${g.word[j]!.toUpperCase()} `}</Text>
-              ) : (
-                <Text dimColor>{' · '}</Text>
-              ),
-            )}
+            {[0, 1, 2, 3, 4].map(j => {
+              if (g) return <Text bold color="white" backgroundColor={MARK[g.marks[j]!]}>{` ${g.word[j]!.toUpperCase()} `}</Text>
+              const ch = isTyping ? (live.typed[j] ?? '') : ''
+              if (isTyping && (ch || flash))
+                return (
+                  <Text bold color={flash ? 'red' : undefined} dimColor={live.props.isSending} underline>
+                    {` ${ch.toUpperCase() || '·'} `}
+                  </Text>
+                )
+
+              return <Text dimColor>{' · '}</Text>
+            })}
           </Box>
         )
       })}
@@ -163,18 +185,26 @@ function keyboard(s: Surf, today: Today) {
   )
 }
 
+const resultLine = (today: Today) =>
+  today.state === 'won' ? `Solved in ${today.guesses.length}/6` : `The word was ${(today.answer ?? '').toUpperCase()}`
+
+function statsLine(stats: Stats) {
+  const win = stats.played ? Math.round((stats.won / stats.played) * 100) : 0
+
+  return `Played ${stats.played}  Win ${win}%  Streak ${stats.streak}  Best ${stats.bestStreak}`
+}
+
 function statsBlock(s: Surf, today: Today, stats: Stats | null) {
   const { Box, Text } = s.elements
-  const result = today.state === 'won' ? `Solved in ${today.guesses.length}/6` : `The word was ${(today.answer ?? '').toUpperCase()}`
+  const result = resultLine(today)
   if (!stats) return <Text bold>{result}</Text>
-  const win = stats.played ? Math.round((stats.won / stats.played) * 100) : 0
   const most = Math.max(1, ...stats.distribution)
   const winRow = today.state === 'won' ? today.guesses.length - 1 : -1
 
   return (
     <Box flexDirection="column">
       <Text bold>{result}</Text>
-      <Text>{`Played ${stats.played}  Win ${win}%  Streak ${stats.streak}  Best ${stats.bestStreak}`}</Text>
+      <Text>{statsLine(stats)}</Text>
       {stats.distribution.map((n, i) => (
         <Box flexDirection="row" gap={1}>
           <Text>{String(i + 1)}</Text>
@@ -193,7 +223,8 @@ function boardLine(r: Board['rows'][number], period: Period) {
   return `${String(r.rank).padStart(3)}  ${login.padEnd(LOGIN_W)}  ${String(score ?? '-').padStart(7)}  ${String(r.played).padStart(6)}`
 }
 
-function boardBlock(live: Live, s: Surf, board: Board | null) {
+// `rows` is how many lines the board may take, tabs and column names included.
+function boardBlock(live: Live, s: Surf, board: Board | null, rows: number) {
   const { Box, Text } = s.elements
   const me = live.props.me
   const period = PERIODS[live.tab]!
@@ -208,16 +239,18 @@ function boardBlock(live: Live, s: Surf, board: Board | null) {
   )
   if (!board || board.period !== period) return <Box flexDirection="column">{tabs}<Text dimColor>Loading...</Text></Box>
   const isIn = board.rows.some(r => r.login === me)
+  const showYou = board.you !== null && !isIn && rows >= 5
+  const top = Math.max(0, Math.min(20, rows - 2 - (showYou ? 2 : 0)))
 
   return (
     <Box flexDirection="column">
       {tabs}
       <Text dimColor>{`${'#'.padStart(3)}  ${'player'.padEnd(LOGIN_W)}  ${(period === 'today' ? 'guesses' : 'points').padStart(7)}  ${'played'.padStart(6)}`}</Text>
-      {board.rows.slice(0, 20).map(r => (
+      {board.rows.slice(0, top).map(r => (
         <Text bold={r.login === me}>{boardLine(r, period)}</Text>
       ))}
-      {board.you && !isIn ? <Text dimColor>{'  ...'}</Text> : null}
-      {board.you && !isIn ? <Text bold>{boardLine(board.you, period)}</Text> : null}
+      {showYou ? <Text dimColor>{'  ...'}</Text> : null}
+      {showYou ? <Text bold>{boardLine(board.you!, period)}</Text> : null}
     </Box>
   )
 }
@@ -227,7 +260,7 @@ function shareLine(s: Surf, copied: View['copied']) {
 
   return (
     <Box flexDirection="row" gap={2}>
-      <Text dimColor>s share  arrows switch board</Text>
+      <Text dimColor>s share  arrows switch board  r reload</Text>
       {copied === 'ok' ? <Text color={GREEN}>Copied</Text> : null}
       {copied === 'failed' ? <Text color="red">Copy failed</Text> : null}
     </Box>
@@ -248,42 +281,64 @@ function draw(live: Live, s: Surf) {
     )
   }
   const done = isDone(today)
-  const min = done ? DONE_MIN : PLAY_MIN
+  const noticeRows = notice ? 2 : 0
   // 0 before the first layout: the region is sized by the hooks, so draw the full screen.
-  if (s.columns > 0 && (s.columns < min.columns || s.rows < min.rows)) {
-    return (
-      <Box paddingX={1}>
-        <Text color="yellow">{`Make the pane bigger to play Daily Diff (${min.columns} x ${min.rows} at least).`}</Text>
-      </Box>
-    )
-  }
+  const room = s.rows > 0 ? s.rows : Infinity
+  const width = s.columns > 0 ? Math.min(WIDE, s.columns) : WIDE
   const header = (
-    <Box flexDirection="row" justifyContent="space-between" width={done ? 57 : 41}>
+    <Box flexDirection="row" justifyContent="space-between" width={done ? width : 41}>
       <Text bold>{`DAILY DIFF #${today.number}`}</Text>
-      <Text dimColor>{`next in ${countdown(today.endsAt - Date.now())}`}</Text>
+      <Text dimColor>{`next in ${countdown(timeLeft(live, today))}`}</Text>
     </Box>
   )
   if (!done) {
+    const isSmall = room < PLAY_ROWS + noticeRows
+    const need = SMALL_PLAY_ROWS + noticeRows
+    if (s.columns > 0 && (s.columns < MIN_COLUMNS || room < need)) {
+      return (
+        <Box paddingX={1}>
+          <Text color="yellow">{`Make the pane bigger to play Daily Diff (${MIN_COLUMNS} x ${need} at least).`}</Text>
+        </Box>
+      )
+    }
+
     return (
       <Box flexDirection="column" alignItems="center" gap={1}>
         {header}
-        {grid(live, s, today)}
+        {isSmall ? smallGrid(live, s, today) : grid(live, s, today)}
         {keyboard(s, today)}
         {noticeLine}
       </Box>
     )
   }
+  // Short or narrow: the result, stats and share come first and the board gets what is left.
+  if (room < DONE_ROWS + noticeRows || width < WIDE) {
+    const fixed = 1 + 1 + (stats ? 1 : 0) + (notice ? 1 : 0) + 1
+
+    return (
+      <Box flexDirection="column" width={width}>
+        {header}
+        <Text bold>{resultLine(today)}</Text>
+        {stats ? <Text>{statsLine(stats)}</Text> : null}
+        {noticeLine}
+        {shareLine(s, copied)}
+        {room - fixed >= 3 ? boardBlock(live, s, board, room - fixed) : null}
+      </Box>
+    )
+  }
+  // Header, the grid and stats (8), board, share, and the gaps between them.
+  const fixed = 1 + 8 + 1 + 3 + noticeRows
 
   return (
     <Box flexDirection="column" alignItems="center" gap={1}>
       {header}
-      <Box flexDirection="row" gap={2} width={57}>
-        {smallGrid(s, today)}
+      <Box flexDirection="row" gap={2} width={WIDE}>
+        {smallGrid(live, s, today)}
         {statsBlock(s, today, stats)}
       </Box>
       {noticeLine}
-      <Box width={57}>{boardBlock(live, s, board)}</Box>
-      <Box width={57}>{shareLine(s, copied)}</Box>
+      <Box width={WIDE}>{boardBlock(live, s, board, room - fixed)}</Box>
+      <Box width={WIDE}>{shareLine(s, copied)}</Box>
     </Box>
   )
 }
@@ -291,13 +346,18 @@ function draw(live: Live, s: Surf) {
 const Game: ClientModule<View, Shell> = (props, surface) => {
   let shell = surface.state
   if (shell === undefined) {
-    const live: Live = { props, rev: 0, t: 0, typed: '', flashUntil: 0, tab: 0, seenRejected: props.rejected, seenGuesses: guessKey(props.today), seenPeriod: null }
+    const live: Live = { props, rev: 0, t: 0, typed: '', flashUntil: 0, tab: 0, seenRejected: props.rejected, seenGuesses: guessKey(props.today), seenPeriod: null, seenNow: props.now, nowAt: 0, askedNext: 0 }
     shell = { live, rev: 0 }
     const commit = () => surface.setState({ live, rev: ++live.rev })
     surface.every(TICK_MS, () => {
       const wasFlashing = live.t < live.flashUntil
       live.t += TICK_MS
       if ((wasFlashing && live.t >= live.flashUntil) || live.t % 1000 === 0) commit()
+      const { today } = live.props
+      if (isDone(today) && today!.number !== live.askedNext && timeLeft(live, today!) <= 0) {
+        live.askedNext = today!.number
+        surface.post({ type: 'retry' })
+      }
     })
     surface.onKey(e => {
       if (e.ctrl || e.meta) return

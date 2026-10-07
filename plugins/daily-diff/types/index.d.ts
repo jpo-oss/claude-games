@@ -14,6 +14,8 @@ export type View = {
   // Bumped on each rejected word so the Client flashes the row once per rejection.
   rejected: number
   copied: 'ok' | 'failed' | null
+  // $.clock.now() when today last loaded, so the Client's countdown runs on the engine's clock.
+  now: number
 }
 export type ClientMsg = { type: 'guess'; word: string } | { type: 'board'; period: Period } | { type: 'share' } | { type: 'retry' }
 

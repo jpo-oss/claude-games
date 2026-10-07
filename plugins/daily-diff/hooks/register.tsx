@@ -23,7 +23,7 @@ const NO_SIGNIN = "This server isn't set up for sign-in."
 const NO_GITHUB = "Couldn't reach GitHub to sign in."
 const CANCELLED = 'Sign-in was cancelled or expired.'
 
-const startView = (): View => ({ me: null, notice: null, today: null, board: null, stats: null, isSending: false, rejected: 0, copied: null })
+const startView = (): View => ({ me: null, notice: null, today: null, board: null, stats: null, isSending: false, rejected: 0, copied: null, now: 0 })
 const view = atom({ plugin: 'daily-diff', key: 'view' } as const, startView())
 
 type Failure = { status: number; error: string }
@@ -182,9 +182,11 @@ async function loadFinished($: EngineInterface, gen: number) {
   const [st, b] = await Promise.all([send($, 'GET', '/v1/daily-diff/stats'), send($, 'GET', '/v1/daily-diff/leaderboard/today')])
   const stats = st.ok ? parseStats(st.data) : null
   const board = b.ok ? parseBoard(b.data) : null
+  await update($, view, v =>
+    isLive(gen) ? { ...v, stats: stats ?? v.stats, board: board && rt.period === 'today' ? board : v.board } : v,
+  )
   if (!stats) return fail($, gen, st.ok ? BAD_REPLY : st)
   if (!board) return fail($, gen, b.ok ? BAD_REPLY : b)
-  await update($, view, v => (isLive(gen) ? { ...v, stats, board: rt.period === 'today' ? board : v.board } : v))
 }
 
 async function refresh($: EngineInterface, notice: string | null = null) {
@@ -192,7 +194,7 @@ async function refresh($: EngineInterface, notice: string | null = null) {
   const r = await send($, 'GET', '/v1/daily-diff/today')
   const today = r.ok ? parseToday(r.data) : null
   if (!today) return fail($, gen, r.ok ? BAD_REPLY : r)
-  await setViewIf($, gen, { me: rt.session?.login ?? null, today, notice, isSending: false })
+  await setViewIf($, gen, { me: rt.session?.login ?? null, today, notice, isSending: false, now: await $.clock.now() })
   if (today.state !== 'playing') await loadFinished($, gen)
 }
 
@@ -214,7 +216,7 @@ async function guess($: EngineInterface, word: string) {
   if (r.ok) {
     const next = parseToday(r.data)
     if (!next) return fail($, gen, BAD_REPLY)
-    await setViewIf($, gen, { today: next, notice: null })
+    await setViewIf($, gen, { today: next, notice: null, now: await $.clock.now() })
     if (next.state !== 'playing') await loadFinished($, gen)
 
     return

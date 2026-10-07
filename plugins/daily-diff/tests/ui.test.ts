@@ -26,10 +26,12 @@ const textOf = (node: unknown): string => {
 const row = async (ui: Ui, i: number) => textOf(await ui.find({ key: `row-${i}`, in: 'game' })).replace(/\s/g, '')
 const rowBorder = async (ui: Ui, i: number) => (await ui.find({ key: `row-${i}`, in: 'game' }))?.children.map(c => (c as { props: { borderColor?: string } }).props.borderColor)
 
-async function open($: Engine, on: On, surface: 'terminal' | 'desktop') {
-  const clock = mock.clock(on)
+const ENDS_AT = Date.UTC(2026, 9, 8)
+
+async function open($: Engine, on: On, surface: 'terminal' | 'desktop', opts: Parameters<typeof server>[1] & { now?: number } = {}) {
+  const clock = mock.clock(on, { now: opts.now ?? 0 })
   store(on, SIGNED_IN)
-  const fake = server(on)
+  const fake = server(on, opts)
   on('ui.open', async () => ({ value: { isPlaced: true as const } }))
   await $.command.run(run)
   const ui = await $.ui.mount(target(surface))
@@ -45,6 +47,9 @@ async function press(ui: Ui, clock: MockClock, ...keys: string[]) {
   }
 }
 const typeWord = (ui: Ui, clock: MockClock, word: string) => press(ui, clock, ...word, 'return')
+const short = (ui: Ui) => ui.resize({ columns: 60, rows: 20, in: 'game' })
+const player = (rank: number, login: string) => ({ rank, login, points: null, guesses: 3, played: 1, ms: 5000 })
+const todayFetches = (seen: { url: string }[]) => seen.filter(r => r.url.endsWith('/v1/daily-diff/today')).length
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`the grid and keyboard draw on ${surface}`, async ($: Engine, on: On) => {
@@ -158,6 +163,107 @@ for (const surface of ['terminal', 'desktop'] as const) {
     isDown = false
     await press(ui, clock, 'r')
     expect(await shown(ui)).toContain('DAILY DIFF #1')
+  })
+
+  test(`a short pane plays with one row per guess on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui, guesses } = await open($, on, surface)
+    await short(ui)
+    const text = await shown(ui)
+    expect(text).not.toContain('bigger')
+    expect(text).toContain('DAILY DIFF #1')
+    expect(text).toContain('ENTER')
+    for (let i = 0; i < 6; i++) expect(await ui.find({ key: `row-${i}`, in: 'game' })).toBeDefined()
+    await press(ui, clock, 'z', 'z')
+    expect(await row(ui, 0)).toBe('ZZ···')
+    await press(ui, clock, 'z', 'z', 'a', 'return')
+    expect(guesses).toEqual(['zzzza'])
+    expect(await row(ui, 0)).toBe('ZZZZA')
+  })
+
+  test(`a short pane still shows the result, stats and share on ${surface}`, async ($: Engine, on: On) => {
+    const rows = Array.from({ length: 20 }, (_, i) => player(i + 1, `p${i + 1}`))
+    const { clock, ui } = await open($, on, surface, { rows })
+    await typeWord(ui, clock, 'qqqqa')
+    await short(ui)
+    const text = await shown(ui)
+    expect(text).not.toContain('bigger')
+    expect(text).toContain('Solved in 1/6')
+    expect(text).toContain('Played 1  Win 100%  Streak 1  Best 1')
+    expect(text).toContain('s share')
+    expect(await ui.find({ type: 'Text', text: /p1 /, in: 'game' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /p20 /, in: 'game' })).toBeUndefined()
+  })
+
+  test(`a very short pane puts the result, stats and share above the board on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui } = await open($, on, surface)
+    await typeWord(ui, clock, 'qqqqa')
+    await ui.resize({ columns: 60, rows: 6, in: 'game' })
+    const text = await shown(ui)
+    expect(text).not.toContain('bigger')
+    expect(text).toContain('Solved in 1/6')
+    expect(text).toContain('Played 1  Win 100%')
+    expect(text).toContain('s share')
+    expect(await ui.find({ type: 'Text', text: /alice/, in: 'game' })).toBeUndefined()
+    await ui.resize({ columns: 60, rows: 8, in: 'game' })
+    expect(await ui.find({ type: 'Text', text: /alice/, in: 'game' })).toBeDefined()
+  })
+
+  test(`a loss shows the word on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui } = await open($, on, surface)
+    for (let i = 0; i < 6; i++) await typeWord(ui, clock, 'zzzza')
+    const text = await shown(ui)
+    expect(text).toContain('The word was QQQQA')
+    expect(text).not.toContain('Solved')
+  })
+
+  test(`your own rank shows under the top 20 on ${surface}`, async ($: Engine, on: On) => {
+    const rows = Array.from({ length: 20 }, (_, i) => player(i + 1, `p${i + 1}`))
+    const { clock, ui } = await open($, on, surface, { rows, you: player(42, 'alice') })
+    await typeWord(ui, clock, 'qqqqa')
+    expect(await ui.find({ type: 'Text', text: /p20 /, in: 'game' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '  ...', in: 'game' })).toBeDefined()
+    const you = await ui.find({ type: 'Text', text: /^ 42 {2}alice /, in: 'game' })
+    expect(you?.props.bold).toBe(true)
+  })
+
+  test(`at midnight the finished screen asks for the new puzzle once on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui, seen } = await open($, on, surface, { now: ENDS_AT - 5000 })
+    await typeWord(ui, clock, 'qqqqa')
+    expect(await shown(ui)).toContain('next in 0m 05s')
+    const before = todayFetches(seen)
+    await ui.advance(4000)
+    await clock.settle()
+    expect(await shown(ui)).toContain('next in 0m 01s')
+    expect(todayFetches(seen)).toBe(before)
+    await ui.advance(1000)
+    await clock.settle()
+    expect(todayFetches(seen)).toBe(before + 1)
+    await ui.advance(5000)
+    await clock.settle()
+    expect(todayFetches(seen)).toBe(before + 1)
+  })
+
+  test(`stats that fail to load come back with r on ${surface}`, async ($: Engine, on: On) => {
+    const { clock, ui, down } = await open($, on, surface)
+    down.add('/v1/daily-diff/stats')
+    await typeWord(ui, clock, 'qqqqa')
+    let text = await shown(ui)
+    expect(text).toContain('Server said: boom')
+    expect(text).not.toContain('Played')
+    expect(await ui.find({ type: 'Text', text: /alice/, in: 'game' })).toBeDefined()
+    down.clear()
+    await press(ui, clock, 'r')
+    text = await shown(ui)
+    expect(text).toContain('Played 1  Win 100%')
+    expect(text).not.toContain('boom')
+  })
+
+  test(`a pane too short even for one row per guess asks to be bigger on ${surface}`, async ($: Engine, on: On) => {
+    const { ui } = await open($, on, surface)
+    await ui.resize({ columns: 60, rows: 10, in: 'game' })
+    const text = await shown(ui)
+    expect(text).toContain('bigger')
+    expect(text).not.toContain('ENTER')
   })
 
   test(`a small pane asks to be bigger on ${surface}`, async ($: Engine, on: On) => {
