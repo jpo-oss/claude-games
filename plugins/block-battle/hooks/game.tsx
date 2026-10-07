@@ -1,12 +1,14 @@
 import type { ClientModule, ClientSurface, RenderChildren } from 'claude-code'
 
-import type { ClientMsg, GameView } from '../types'
-import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_MS, TIERS, TRAIL_MS, bigWord, blankRows, emptyFx, fieldRows, overStep, pickTier, previewRows, runs, snapshotRows } from './draw'
+import type { BotLevel, ClientMsg, GameView } from '../types'
+import { CLEAR_MS, COMPACT, FIELD_W, GARBAGE_MS, LABEL_MS, LEVEL_MS, OVER_FINAL_MS, TIERS, TRAIL_MS, bigWord, blankRows, emptyFx, fieldRows, formatMs, overStep, pickTier, previewRows, runs, snapshotRows, vsOverlay } from './draw'
 import type { Ch, Fx, Label, Overlay, Size } from './draw'
 import { newGame, receiveGarbage, snapshot, step } from './engine'
 import type { Game, GameEvent, Input, Mode } from './engine'
 import { STEP_MS, chunkAt, newPace, newRecorder, newSender, nextSend, recordGarbage, recordStep, stepsDue, toUpload } from './log'
 import type { LogMsg, Pace, Recorder, Sender, Upload } from './log'
+import { newMatch, stepMatch } from './match.ts'
+import type { Match } from './match.ts'
 import { serverUrlOk } from './net'
 
 // Rows per down press; tuned by feel (1 was too slow). A step stops at the floor, so more never locks.
@@ -14,7 +16,9 @@ const SOFT_DROP_ROWS = 2
 const SYNC_MS = 200
 const START_WAIT_MS = 3_000
 
-type Screen = 'menu' | 'servers' | 'lobby' | 'play' | 'leaderboard' | 'starting'
+type Screen = 'menu' | 'servers' | 'lobby' | 'play' | 'leaderboard' | 'starting' | 'levels'
+
+type Vs = { level: BotLevel; match: Match; gameId: string | null; snap: string }
 
 // Everything mutable lives here, so the 16 ms tick changes it in place and asks for a redraw only when
 // something visible moved. `rev` is what setState carries to make the engine call the module again.
@@ -54,13 +58,26 @@ type Live = {
   // The address being typed on the server screen, or null while choosing from the list.
   typing: string | null
   typeError: string | null
+  vs: Vs | null
+  // Set while the Starting screen waits on a Vs Bot game rather than a Marathon one.
+  startingBot: BotLevel | null
+  // The highest props.vsbot nonce already adopted or closed.
+  botSeen: number
+  lbPage: 0 | 1
 }
 
 const MENU = [
   { label: 'Marathon', hint: 'solo, endless levels' },
+  { label: 'Vs Bot', hint: 'solo, against a bot' },
   { label: 'Battle', hint: 'online 1v1' },
   { label: 'Leaderboard', hint: 'top 5' },
 ] as const
+
+const BOT_LEVELS = [
+  { id: 'easy', name: 'Merge Conflict (easy)' },
+  { id: 'medium', name: 'Hotfix in Prod (medium)' },
+  { id: 'hard', name: 'Deploy on Friday (hard)' },
+] as const satisfies readonly { id: BotLevel; name: string }[]
 
 const emptyProps = (): GameView => ({
   me: null,
@@ -69,6 +86,7 @@ const emptyProps = (): GameView => ({
   battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null },
   servers: { home: '', last: null, active: '' },
   marathon: null,
+  vsbot: null,
   uploaded: null,
 })
 
@@ -77,6 +95,7 @@ const newLive = (props: GameView): Live => ({
   pace: newPace(0), rec: newRecorder(), gameId: null, nonce: 0, waitMs: 0, waitAt: 0, uploads: [], sender: newSender(), hasSentLog: false,
   isPaused: false, fx: emptyFx(), overMs: 0, applied: 0, outbox: [], attacks: [], syncMs: 0, seq: 0, roomId: null,
   hasPostedOver: false, result: null, isDirty: true, hasKeyed: false, pick: 0, typing: null, typeError: null,
+  vs: null, startingBot: null, botSeen: 0, lbPage: 0,
 })
 
 const CLEAR_NAMES: Record<string, string> = {
@@ -98,7 +117,7 @@ function applyEvents(live: Live, before: Game, events: readonly GameEvent[]) {
       pushLabel(fx, CLEAR_NAMES[ev.kind] ?? String(ev.kind).toUpperCase(), ev.kind === 'quad' ? '#00e5ff' : ev.kind.startsWith('tspin') ? '#b44cff' : '#ffd400')
       if (ev.b2b) pushLabel(fx, 'BACK-TO-BACK', '#ff9a1f')
       if (ev.combo >= 1) pushLabel(fx, `COMBO x${ev.combo}`, '#38d64a')
-      if (live.mode === 'battle' && ev.attack > 0) live.attacks.push(ev.attack)
+      if (live.mode === 'battle' && !live.vs && ev.attack > 0) live.attacks.push(ev.attack)
     } else if (ev.type === 'hardDrop') {
       const kind = before.active?.kind
       if (kind && Array.isArray(ev.columns)) fx.trail = { cols: ev.columns, from: ev.from, to: ev.to, kind, age: 0 }
@@ -139,6 +158,7 @@ function ageFx(fx: Fx, dt: number): boolean {
 function startGame(live: Live, mode: Mode, seed: number) {
   live.screen = 'play'
   live.mode = mode
+  live.vs = null
   live.game = newGame(mode, seed)
   live.inputs = []
   live.isPaused = false
@@ -158,6 +178,7 @@ const randomSeed = () => Math.floor(Math.random() * 0x100000000)
 
 function askMarathon(live: Live) {
   live.screen = 'starting'
+  live.startingBot = null
   live.nonce++
   live.waitMs = 0
   live.waitAt = performance.now()
@@ -165,8 +186,36 @@ function askMarathon(live: Live) {
   live.isDirty = true
 }
 
-function queueUpload(live: Live, kind: 'marathon' | 'battle') {
-  const key = kind === 'marathon' ? live.gameId : live.roomId
+function askBot(live: Live, level: BotLevel) {
+  live.screen = 'starting'
+  live.startingBot = level
+  live.nonce++
+  live.waitMs = 0
+  live.waitAt = performance.now()
+  live.outbox.push({ type: 'menu', choice: 'bot', level, nonce: live.nonce })
+  live.isDirty = true
+}
+
+function startVs(live: Live, level: BotLevel, gameId: string | null, seed: number) {
+  startGame(live, 'battle', seed)
+  live.startingBot = null
+  live.roomId = null
+  live.gameId = null
+  const match = newMatch(seed, level)
+  live.vs = { level, match, gameId, snap: '' }
+  live.game = match.me
+}
+
+// Closes a ranked game this Client will not play: the server counts it as a loss.
+function forfeit(live: Live, gameId: string) {
+  const rec = newRecorder()
+  recordStep(rec, [])
+  const u = toUpload('bot', gameId, rec)
+  if (u) live.uploads.push(u)
+}
+
+function queueUpload(live: Live, kind: Upload['kind']) {
+  const key = kind === 'marathon' ? live.gameId : kind === 'bot' ? (live.vs?.gameId ?? null) : live.roomId
   if (key === null) return
   const u = toUpload(kind, key, live.rec)
   if (u) live.uploads.push(u)
@@ -191,6 +240,8 @@ function nextChunk(live: Live): LogMsg | null {
 
 function leave(live: Live) {
   if (live.mode === 'marathon' && live.game && !live.game.isOver) queueUpload(live, 'marathon')
+  if (live.vs && !live.result) queueUpload(live, 'bot')
+  live.vs = null
   live.screen = 'menu'
   live.game = null
   live.result = null
@@ -259,12 +310,16 @@ function onKey(live: Live, key: string) {
     else if (k === 'return' || k === ' ') {
       if (live.menu === 0) askMarathon(live)
       else if (live.menu === 1) {
+        live.screen = 'levels'
+        live.pick = 0
+      } else if (live.menu === 2) {
         live.screen = 'servers'
         live.pick = 0
         live.typing = null
         live.typeError = null
       } else {
         live.screen = 'leaderboard'
+        live.lbPage = 0
         live.outbox.push({ type: 'menu', choice: 'leaderboard' })
       }
     }
@@ -278,9 +333,19 @@ function onKey(live: Live, key: string) {
 
     return
   }
+  if (live.screen === 'levels') {
+    if (k === 'up' || k === 'k') live.pick = (live.pick + BOT_LEVELS.length - 1) % BOT_LEVELS.length
+    else if (k === 'down' || k === 'j') live.pick = (live.pick + 1) % BOT_LEVELS.length
+    else if (k === 'q') live.screen = 'menu'
+    else if (k === 'return' || k === ' ') askBot(live, BOT_LEVELS[live.pick]!.id)
+    live.isDirty = true
+
+    return
+  }
   if (live.screen === 'lobby' || live.screen === 'leaderboard' || live.screen === 'starting') {
     if (k === 'q' || (k === 'return' && live.screen !== 'starting')) leave(live)
     else if (k === 'r' && live.screen === 'leaderboard') live.outbox.push({ type: 'menu', choice: 'leaderboard' })
+    else if ((k === 'left' || k === 'right') && live.screen === 'leaderboard') live.lbPage = live.lbPage === 0 ? 1 : 0
     live.isDirty = true
 
     return
@@ -323,16 +388,31 @@ function tick(live: Live) {
   }
   if (live.screen === 'starting') {
     live.waitMs += STEP_MS
-    const m = p.marathon
-    if (m && m.nonce === live.nonce) {
-      live.gameId = m.gameId
-      startGame(live, 'marathon', m.gameId === null ? randomSeed() : m.seed)
-    } else if (Math.max(live.waitMs, performance.now() - live.waitAt) >= START_WAIT_MS) {
-      live.gameId = null
-      startGame(live, 'marathon', randomSeed())
+    const isLate = Math.max(live.waitMs, performance.now() - live.waitAt) >= START_WAIT_MS
+    const level = live.startingBot
+    if (level !== null) {
+      const b = p.vsbot
+      if (b && b.nonce === live.nonce) {
+        live.botSeen = b.nonce
+        startVs(live, level, b.gameId, b.gameId === null ? randomSeed() : b.seed)
+      } else if (isLate) startVs(live, level, null, randomSeed())
+    } else {
+      const m = p.marathon
+      if (m && m.nonce === live.nonce) {
+        live.gameId = m.gameId
+        startGame(live, 'marathon', m.gameId === null ? randomSeed() : m.seed)
+      } else if (isLate) {
+        live.gameId = null
+        startGame(live, 'marathon', randomSeed())
+      }
     }
   }
-  if (live.screen === 'play' && live.mode === 'battle' && live.roomId !== null && p.battle.status === 'idle') {
+  const vb = p.vsbot
+  if (vb && vb.nonce > live.botSeen && !(live.screen === 'starting' && live.startingBot !== null && vb.nonce === live.nonce)) {
+    live.botSeen = vb.nonce
+    if (vb.gameId !== null) forfeit(live, vb.gameId)
+  }
+  if (live.screen === 'play' && live.mode === 'battle' && !live.vs && live.roomId !== null && p.battle.status === 'idle') {
     // The server dropped the match under us: back to the lobby, where the notice is shown.
     live.screen = 'lobby'
     live.game = null
@@ -347,7 +427,7 @@ function tick(live: Live) {
   let dirty = live.isDirty
   const game = live.game
   if (live.screen === 'play' && game) {
-    if (live.mode === 'battle' && live.roomId === p.battle.roomId) {
+    if (live.mode === 'battle' && !live.vs && live.roomId === p.battle.roomId) {
       let g = game
       if (!g.isOver && !live.result) {
         const { incoming } = p.battle
@@ -379,6 +459,15 @@ function tick(live: Live) {
         const counted = live.rec.steps
         recordStep(live.rec, inputs)
         if (live.rec.steps === counted) break
+        if (live.vs) {
+          const r = stepMatch(live.vs.match, inputs)
+          applyEvents(live, g, r.me)
+          if (r.me.length > 0) moved = true
+          g = live.vs.match.me
+          inputs = []
+          if (live.vs.match.winner) break
+          continue
+        }
         const r = step(g, inputs, STEP_MS)
         applyEvents(live, g, r.events)
         if (r.events.length > 0) moved = true
@@ -388,6 +477,19 @@ function tick(live: Live) {
       live.game = g
       const b = g.active
       if (moved || a?.x !== b?.x || a?.y !== b?.y || a?.rotation !== b?.rotation || a?.kind !== b?.kind) dirty = true
+    }
+    if (live.vs) {
+      const snap = snapshot(live.vs.match.bot)
+      if (snap !== live.vs.snap) {
+        live.vs.snap = snap
+        dirty = true
+      }
+      const w = live.vs.match.winner
+      if (w && !live.result) {
+        live.result = w === 'me' ? 'win' : 'loss'
+        queueUpload(live, 'bot')
+        dirty = true
+      }
     }
     const now = live.game!
     if (now.isOver || live.result) {
@@ -399,7 +501,7 @@ function tick(live: Live) {
 
     if (now.isOver && !live.hasPostedOver && live.mode === 'marathon') queueUpload(live, 'marathon')
     // The top-out is posted again until a result comes: one lost post must not leave the hooks unaware.
-    if (live.mode === 'battle' && !live.result) {
+    if (live.mode === 'battle' && !live.vs && !live.result) {
       live.syncMs += dt
       if (live.syncMs >= SYNC_MS || (now.isOver && !live.hasPostedOver)) {
         live.syncMs = 0
@@ -494,7 +596,8 @@ function drawTitle(live: Live, surface: Surf, width: number) {
 
 function drawOpponent(live: Live, surface: Surf, framed: boolean) {
   const { Box, Text } = surface.elements
-  const opp = live.props.battle.opponent
+  const vs = live.vs
+  const opp = vs ? { login: `${vs.level} bot`, snapshot: vs.snap, isOver: vs.match.bot.isOver } : live.props.battle.opponent
   const name = (opp ? opp.login : 'opponent').slice(0, 10)
   const body = (
     <Box flexDirection="column">
@@ -602,8 +705,11 @@ function drawPlay(live: Live, surface: Surf) {
   const isDone = game.isOver || live.result !== null
   let overlay: Overlay | null = null
   if (isDone && live.overMs > OVER_FINAL_MS) {
-    const text = live.result ? (live.result === 'win' ? 'YOU WIN' : 'YOU LOSE') : 'GAME OVER'
-    overlay = { title: text, color: live.result === 'win' ? '#38d64a' : '#ff3b3b', lines: [`SCORE ${game.score}`, live.mode === 'marathon' && live.gameId === null ? 'unranked' : '', live.mode === 'marathon' ? 'r restart  q menu' : 'q menu'] }
+    if (live.vs) overlay = vsOverlay(live.result === 'win', live.vs.match.steps, live.vs.gameId !== null)
+    else {
+      const text = live.result ? (live.result === 'win' ? 'YOU WIN' : 'YOU LOSE') : 'GAME OVER'
+      overlay = { title: text, color: live.result === 'win' ? '#38d64a' : '#ff3b3b', lines: [`SCORE ${game.score}`, live.mode === 'marathon' && live.gameId === null ? 'unranked' : '', live.mode === 'marathon' ? 'r restart  q menu' : 'q menu'] }
+    }
   }
   const pending = game.pendingGarbage.reduce((n, g) => n + g.lines, 0)
   const flash = fx.levelUp !== null && Math.floor(fx.levelUp / 100) % 2 === 0
@@ -713,7 +819,7 @@ function drawStarting(live: Live, surface: Surf) {
 
   return (
     <Box flexDirection="column" alignItems="center" paddingX={1}>
-      <Text bold color="cyan">MARATHON</Text>
+      <Text bold color="cyan">{live.startingBot ? 'VS BOT' : 'MARATHON'}</Text>
       <Text>{`Starting${'.'.repeat(1 + (Math.floor(live.t / 320) % 3))}`}</Text>
     </Box>
   )
@@ -754,6 +860,31 @@ function drawServers(live: Live, surface: Surf) {
   )
 }
 
+function drawLevels(live: Live, surface: Surf) {
+  const { Box, Text } = surface.elements
+  const w = Math.min(46, Math.max(24, surface.columns - 2))
+  const inner = w - 2
+
+  return (
+    <Box flexDirection="column" alignItems="center" paddingX={1}>
+      <Text bold color="cyan">VS BOT</Text>
+      <Text dimColor>Pick a bot to beat</Text>
+      {panel(
+        surface,
+        w,
+        FRAME,
+        BOT_LEVELS.map((l, i) => {
+          const sel = i === live.pick
+          const text = (' ' + (sel ? '> ' : '  ') + l.name).padEnd(inner).slice(0, inner)
+
+          return <Text bold={sel} inverse={sel} color={sel ? 'cyan' : undefined}>{text}</Text>
+        }),
+      )}
+      <Text dimColor>enter starts, q goes back</Text>
+    </Box>
+  )
+}
+
 function drawLobby(live: Live, surface: Surf) {
   const { Box, Text } = surface.elements
   const { notice, battle } = live.props
@@ -776,50 +907,58 @@ function drawLobby(live: Live, surface: Surf) {
   )
 }
 
-type Entry = { login: string; value: number }
+type Entry = { login: string; value: string }
 
-function board(surface: Surf, title: string, empty: string, entries: Entry[], width: number, me: string | null) {
+function board(surface: Surf, title: string, empty: string, entries: Entry[], width: number, me: string | null, num = 7, framed = true) {
   const { Box, Text } = surface.elements
   const inner = width - 2
-  const num = 7
-
-  return panel(
-    surface,
-    width,
-    FRAME,
+  const body = (
     <Box flexDirection="column">
-      <Text bold color={TITLE}>{' ' + title}</Text>
+      <Text bold color={TITLE}>{(' ' + title).slice(0, inner)}</Text>
       {entries.length === 0 && <Text dimColor>{' ' + empty}</Text>}
       {entries.map((r, i) => {
         const mine = r.login === me
         const name = r.login.slice(0, Math.max(4, inner - num - 4))
-        const text = (` ${i + 1}  ${name}`.padEnd(inner - num) + String(r.value).padStart(num - 1) + ' ').slice(0, inner)
+        const text = (` ${i + 1}  ${name}`.padEnd(inner - num) + r.value.padStart(num - 1) + ' ').slice(0, inner)
 
         return <Text bold={mine} inverse={mine} color={mine ? 'yellow' : undefined}>{text}</Text>
       })}
-    </Box>,
+    </Box>
   )
+
+  return framed ? panel(surface, width, FRAME, body) : <Box flexDirection="column" width={width}>{body}</Box>
 }
 
 function drawLeaderboard(live: Live, surface: Surf) {
   const { Box, Text } = surface.elements
   const { leaderboard, notice, me } = live.props
-  const wide = surface.columns >= 62
-  const w = wide ? 30 : Math.min(36, Math.max(24, surface.columns - 2))
+  const cols = surface.columns
+  const isBot = live.lbPage === 1
+  const wide = cols >= (isBot ? 82 : 62)
+  const w = wide ? (isBot ? 26 : 30) : Math.min(36, Math.max(24, cols - 2))
+  // Three stacked boards fit a short pane only without their frames.
+  const framed = !isBot || wide || surface.rows >= 30
+  const boards = !leaderboard
+    ? null
+    : isBot
+      ? BOT_LEVELS.map(l => board(surface, l.name, 'no wins yet', leaderboard.bot[l.id].map(r => ({ login: r.login, value: formatMs(r.ms) })), w, me, 10, framed))
+      : [
+          board(surface, 'Marathon top 5', 'no scores yet', leaderboard.marathon.map(r => ({ login: r.login, value: String(r.score) })), w, me),
+          board(surface, 'Battle wins top 5', 'no wins yet', leaderboard.wins.map(r => ({ login: r.login, value: String(r.wins) })), w, me),
+        ]
 
   return (
     <Box flexDirection="column" alignItems="center" paddingX={1}>
       <Text bold color="cyan">LEADERBOARD</Text>
       <Text dimColor>{hostOf(live.props.servers.active)}</Text>
-      {leaderboard ? (
-        <Box flexDirection={wide ? 'row' : 'column'} gap={1}>
-          {board(surface, 'Marathon top 5', 'no scores yet', leaderboard.marathon.map(r => ({ login: r.login, value: r.score })), w, me)}
-          {board(surface, 'Battle wins top 5', 'no wins yet', leaderboard.wins.map(r => ({ login: r.login, value: r.wins })), w, me)}
+      {boards ? (
+        <Box flexDirection={wide ? 'row' : 'column'} gap={framed ? 1 : 0}>
+          {boards}
         </Box>
       ) : (
         <Text color={notice ? 'red' : undefined}>{notice ?? 'Loading...'}</Text>
       )}
-      <Text dimColor>r refreshes, q goes back</Text>
+      <Text dimColor>arrows page  r refresh  q back</Text>
     </Box>
   )
 }
@@ -849,6 +988,7 @@ const Game: ClientModule<GameView, Shell> = (props, surface) => {
   if (live.screen === 'play' && live.game) return drawPlay(live, surface)
   if (live.screen === 'starting') return drawStarting(live, surface)
   if (live.screen === 'servers') return drawServers(live, surface)
+  if (live.screen === 'levels') return drawLevels(live, surface)
   if (live.screen === 'lobby') return drawLobby(live, surface)
   if (live.screen === 'leaderboard') return drawLeaderboard(live, surface)
 

@@ -109,8 +109,10 @@ All under `/v1`, JSON, `Authorization: Bearer <session>` except sign-in.
 | POST | `/v1/session` | Exchange a GitHub token for a session key |
 | DELETE | `/v1/session` | Sign out: revoke the session key |
 | POST | `/v1/marathon` | Start a Marathon game: returns a game ID and the piece seed |
-| GET | `/v1/leaderboard` | Top 5 scores, top 5 wins |
+| GET | `/v1/leaderboard` | Top 5 scores, top 5 wins, top 5 fastest wins per bot level |
 | POST | `/v1/scores` | Submit a Marathon game's input log for replay |
+| POST | `/v1/bot` | Start a ranked Vs Bot match: returns a game ID and the seed |
+| POST | `/v1/bot/scores` | Submit a Vs Bot match's input log for replay |
 | POST, DELETE | `/v1/battle/queue` | Join or leave matchmaking |
 | POST | `/v1/battle/:room/sync` | Send attacks and board snapshot, get opponent state and incoming garbage |
 | GET | `/health` | Uptime checks |

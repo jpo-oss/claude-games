@@ -45,11 +45,13 @@ claude plugin uninstall block-battle@claude-games
 
 ### Block Battle
 
-A falling-block puzzle. Play solo Marathon, battle other players 1v1, and climb the leaderboard.
+A falling-block puzzle. Play solo Marathon, beat a bot at three levels, battle other players 1v1, and climb the leaderboard.
 
 Run `/cg-block-battle` and click the pane to start. Left and right move, down drops faster, space drops all the way. Up or x rotates, z rotates the other way, a flips, c holds. p pauses Marathon, q goes back to the menu, Esc leaves the pane.
 
 Marathon works offline, but a game only counts for the leaderboard if you were signed in when it started. Otherwise it says "unranked" at the end. Battles and the leaderboard need a one-time GitHub sign-in: the game shows a code, you enter it at github.com/login/device, and that's it. The sign-in asks for no permissions, so the server only learns your public username. The game keeps a key for that server and never stores your GitHub token.
+
+Vs Bot puts you against a bot that runs on your machine, so it plays offline too. Pick Merge Conflict (easy), Hotfix in Prod (medium) or Deploy on Friday (hard). If you were signed in when the match started, a win counts toward that level's fastest wins on the leaderboard's second page (left and right switch pages). Leaving a ranked match with q counts as a loss.
 
 To sign out of the server you're on:
 

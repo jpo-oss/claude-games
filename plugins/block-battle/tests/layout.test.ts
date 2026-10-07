@@ -14,9 +14,11 @@ type Ui = Mounted<'terminal', 'Pane'>
 const SIZES = { big: { columns: 66, rows: 46 }, compact: { columns: 48, rows: 26 }, mini: { columns: 33, rows: 22 }, tiny: { columns: 20, rows: 10 } } as const
 type SizeName = keyof typeof SIZES
 
+const ROWS = [['bob', 61_250], ['alice', 75_000], ['carol', 90_000], ['dave', 120_000], ['erin', 3_723_450]].map(([login, ms]) => ({ login, ms, at: 1 }))
 const BOARD = {
   marathon: [{ login: 'bob', score: 91250, lines: 80, level: 9, at: 1 }, { login: 'alice', score: 40300, lines: 41, level: 5, at: 2 }, { login: 'carol', score: 1200, lines: 5, level: 1, at: 3 }],
   wins: [{ login: 'alice', wins: 12 }, { login: 'bob', wins: 3 }],
+  bot: { easy: ROWS, medium: ROWS, hard: ROWS },
 }
 function serve(on: On) {
   on('store.get', async (_$, e) => ({ value: e.key === 'session:https://games.jpoapps.com' ? { session: 's', login: 'alice' } : undefined }))
@@ -44,7 +46,7 @@ async function screen(ui: Ui, size: SizeName): Promise<string[]> {
     // The dump clips here and a real terminal wraps, so check the content itself: the too-small
     // note on the game screens, the screen's own heading on the menus.
     const drawn = JSON.stringify(tree)
-    expect(['Too small for Block Battle', 'Marathon', 'BATTLE', 'MARATHON TOP'].some(word => drawn.includes(word))).toBe(true)
+    expect(['Too small for Block Battle', 'Marathon', 'BATTLE', 'MARATHON TOP', 'VS BOT', 'LEADERBOARD'].some(word => drawn.includes(word))).toBe(true)
   }
   const lines = flatten(tree, columns, rows)
   const out = [`+${'-'.repeat(columns)}+  region ${columns}x${rows}, drawn ${nat.w}x${nat.h}`]
@@ -66,6 +68,7 @@ async function drop(ui: Ui, n: number) {
 const emit = (name: string, lines: string[]) => console.log(`@@DUMP ${name}\n${lines.join('\n')}\n@@END`)
 
 const toLeaderboard = async (ui: Ui) => {
+  await ui.key({ key: 'down' })
   await ui.key({ key: 'down' })
   await ui.key({ key: 'down' })
   await ui.key({ key: 'return' })
@@ -92,10 +95,21 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     emit(`${size}-menu-top-score`, await screen(ui, size))
   })
 
+  test(`${size}: the bot leaderboard page fits`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on)
+    const ui = await open($, size)
+    await toLeaderboard(ui)
+    await ui.key({ key: 'right' })
+    await ui.advance(48)
+    emit(`${size}-leaderboard-bot`, await screen(ui, size))
+  })
+
   test(`${size}: the battle lobby fits`, async ($: Engine, on: On) => {
     mock.clock(on)
     serve(on)
     const ui = await open($, size)
+    await ui.key({ key: 'down' })
     await ui.key({ key: 'down' })
     await ui.key({ key: 'return' })
     await ui.key({ key: 'return' })
@@ -107,6 +121,7 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     mock.clock(on)
     serve(on)
     const ui = await open($, size)
+    await ui.key({ key: 'down' })
     await ui.key({ key: 'down' })
     await ui.key({ key: 'return' })
     await ui.advance(48)
@@ -136,5 +151,28 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     await drop(ui, 16)
     await ui.advance(1_000)
     emit(`${size}-gameover`, await screen(ui, size))
+  })
+
+  test(`${size}: the level picker fits`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on)
+    const ui = await open($, size)
+    await ui.key({ key: 'down' })
+    await ui.key({ key: 'return' })
+    await ui.advance(48)
+    emit(`${size}-levels`, await screen(ui, size))
+  })
+
+  test(`${size}: a vs bot match fits`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on)
+    const ui = await open($, size)
+    await ui.key({ key: 'down' })
+    await ui.key({ key: 'return' })
+    await ui.key({ key: 'return' })
+    await ui.advance(100)
+    await ui.advance(16)
+    await drop(ui, 3)
+    emit(`${size}-vsbot`, await screen(ui, size))
   })
 }

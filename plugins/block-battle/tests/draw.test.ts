@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { COLORS, COMPACT, bigWord, emptyFx, fade, fieldRows, overStep, pickTier, previewRows, reconstruct, runs, snapshotRows } from '../hooks/draw'
+import { COLORS, COMPACT, bigWord, emptyFx, fade, fieldRows, formatMs, overStep, pickTier, previewRows, reconstruct, runs, snapshotRows, vsOverlay } from '../hooks/draw'
 import type { Ch, Size } from '../hooks/draw'
 import { newGame } from '../hooks/engine'
 import type { Cell } from '../hooks/engine'
@@ -193,4 +193,12 @@ test('game over: the animation clock advances until 700 ms, then holds so the sc
   expect(overStep(5_000, 16)).toBe(5_000)
   const g = newGame('marathon', 3)
   expect(fieldRows(g, emptyFx(), [], 706)).toEqual(fieldRows(g, emptyFx(), [], 5_000))
+})
+
+test('vs bot overlay: a win shows the time, a loss does not, unranked says so', () => {
+  expect(formatMs(0)).toBe('0:00.00')
+  expect(formatMs(62_500)).toBe('1:02.50')
+  expect(formatMs(3_723_450)).toBe('62:03.45')
+  expect(vsOverlay(true, 3907, true)).toEqual({ title: 'YOU WIN', color: '#38d64a', lines: ['TIME 1:02.51', '', 'q menu'] })
+  expect(vsOverlay(false, 10, false)).toEqual({ title: 'YOU LOSE', color: '#ff3b3b', lines: ['', 'unranked', 'q menu'] })
 })

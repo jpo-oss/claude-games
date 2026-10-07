@@ -141,6 +141,16 @@ export function overlayBox(o: Overlay, width: number): Ch[][] {
   return boxChars(lines, w, o.color, POPUP_BG)
 }
 
+export function formatMs(ms: number): string {
+  const cs = Math.floor(ms / 10)
+
+  return `${Math.floor(cs / 6000)}:${String(Math.floor(cs / 100) % 60).padStart(2, '0')}.${String(cs % 100).padStart(2, '0')}`
+}
+
+export function vsOverlay(won: boolean, steps: number, ranked: boolean): Overlay {
+  return { title: won ? 'YOU WIN' : 'YOU LOSE', color: won ? '#38d64a' : '#ff3b3b', lines: [won ? `TIME ${formatMs(steps * 16)}` : '', ranked ? '' : 'unranked', 'q menu'] }
+}
+
 const EMPTY_A = '#14141b'
 const EMPTY_B = '#191922'
 

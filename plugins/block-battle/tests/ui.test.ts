@@ -19,11 +19,17 @@ const run = (args: string) => ({ command: 'cg-block-battle', args, origin: { kin
 
 const shown = async (ui: Ui) => JSON.stringify(await ui.drawn({ in: 'game' }))
 
+const MENU_AT = { marathon: 0, bot: 1, battle: 2, leaderboard: 3 } as const
+
+async function menuTo(ui: Ui, item: keyof typeof MENU_AT) {
+  for (let i = 0; i < MENU_AT[item]; i++) await ui.key({ key: 'down' })
+}
+
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`the menu draws on ${surface}`, async ($: Engine) => {
     const ui = await $.ui.mount(target(surface))
     const text = await shown(ui)
-    for (const word of ['Play while Claude works', 'Marathon', 'Battle', 'Leaderboard', 'click here to activate panel']) expect(text).toContain(word)
+    for (const word of ['Play while Claude works', 'Marathon', 'Vs Bot', 'Battle', 'Leaderboard', 'click here to activate panel']) expect(text).toContain(word)
     // The title must be there in some form: block letters in the big layout, plain text otherwise.
     expect(text.includes('BLOCK BATTLE') || text.includes('█')).toBe(true)
     const client = await ui.find({ type: 'Client' })
@@ -118,7 +124,7 @@ test('battle: each incoming attack is applied once, however often the server rep
     return { status: 200, body: { opponent: OPPONENT, incoming } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -147,8 +153,7 @@ test('the leaderboard degrades to a short message when the server is down', asyn
     throw new Error('connection refused')
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'leaderboard')
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -159,8 +164,7 @@ test('an outdated game tells the player how to update', async ($: Engine, on: On
   mock.clock(on)
   serve(on, () => ({ status: 426, body: { error: 'protocol 1 is no longer supported' } }))
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'leaderboard')
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -177,8 +181,7 @@ test('the leaderboard shows both columns and marks your own row', async ($: Engi
     },
   }))
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'leaderboard')
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -366,7 +369,7 @@ test('battle: every applied attack is logged once and the log goes out after the
     return { status: 200, body: { opponent: OPPONENT, incoming, ...(hasResult ? { result: { winner: 'alice' } } : {}) } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   for (let i = 0; i < 20; i++) await ui.advance(200)
@@ -391,7 +394,7 @@ test('battle: garbage that arrives after topping out is neither applied nor logg
     return { status: 200, body: { opponent: OPPONENT, incoming: [{ id: 9, lines: 4 }], result: { winner: 'bob' } } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(100)
@@ -416,7 +419,7 @@ test('battle: a failed queue poll takes the player off the server queue before i
     return polls === 1 ? { status: 200, body: { status: 'waiting' } } : { status: 500, body: { error: 'boom' } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -435,7 +438,7 @@ test('battle: a 401 during sync ends the match once and does not retry with the 
     return { status: 401, body: { error: 'bad token' } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -462,7 +465,7 @@ test('after game over and the settled animation, r still restarts', async ($: En
   expect(await shown(ui)).not.toContain('GAME OVER')
 })
 
-const chunk = (key: string, kind: 'marathon' | 'battle', values: number[], inputsLen = values.length, steps = 50) =>
+const chunk = (key: string, kind: 'marathon' | 'battle' | 'bot', values: number[], inputsLen = values.length, steps = 50) =>
   ({ type: 'log', kind, key, steps, inputsLen, total: values.length, at: 0, values })
 
 const props = async (ui: Ui) => (await ui.find({ type: 'Client' }))?.props.props as Record<string, unknown>
@@ -555,7 +558,7 @@ test('a battle log goes to the room after the result', async ($: Engine, on: On)
     return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: 'alice' } } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   for (let i = 0; i < 6; i++) await ui.advance(200)
@@ -575,7 +578,7 @@ test('a 404 on sync ends the match with a reason', async ($: Engine, on: On) => 
     return { status: 404, body: { error: 'no such room' } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   for (let i = 0; i < 10; i++) await ui.advance(200)
@@ -591,7 +594,7 @@ test('a result with no winner ends the match', async ($: Engine, on: On) => {
     return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: null } } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   for (let i = 0; i < 6; i++) await ui.advance(200)
@@ -612,7 +615,7 @@ test('isOver posted while a sync is in flight is sent when that sync returns', a
     return { value: reply({ opponent: OPPONENT, incoming: [], ...(body.isOver ? { result: { winner: 'bob' } } : {}) }) }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -652,8 +655,7 @@ function github(
 }
 
 async function openLeaderboard(ui: Ui) {
-  await ui.key({ key: 'down' })
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'leaderboard')
   await ui.key({ key: 'return' })
   await ui.advance(48)
   await ui.advance(48)
@@ -771,7 +773,7 @@ test('a winner who is neither player is not shown as a win', async ($: Engine, o
     return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: 'mallory' } } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -787,7 +789,7 @@ test('a battle the player really won shows a win', async ($: Engine, on: On) => 
     return { status: 200, body: { opponent: OPPONENT, incoming: [], result: { winner: 'alice' } } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -824,7 +826,7 @@ test('signing out with no session still answers', async ($: Engine, on: On) => {
 })
 
 async function startBattle(ui: Ui) {
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -871,7 +873,7 @@ test('a match the server drops goes back to the lobby with the reason', async ($
 })
 
 async function openPicker(ui: Ui) {
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.advance(48)
 }
@@ -974,7 +976,7 @@ test('a topped-out player whose syncs keep failing is taken out of the match', a
     return { status: 500, body: { error: 'boom' } }
   })
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(48)
@@ -1016,7 +1018,7 @@ test('battle: the top-out is posted again until the result comes', async ($: Eng
   })
   const overs = () => seen.filter(r => (r.body as { isOver?: boolean } | undefined)?.isOver === true).length
   const ui = await $.ui.mount(target('terminal'))
-  await ui.key({ key: 'down' })
+  await menuTo(ui, 'battle')
   await ui.key({ key: 'return' })
   await ui.key({ key: 'return' })
   await ui.advance(100)
@@ -1423,4 +1425,228 @@ test('a late 401 for an old session leaves a newer stored session alone', async 
   await ui.advance(48)
   await ui.advance(48)
   expect(saves.get('session:' + OFFICIAL_URL)).toEqual({ session: 'sess_2', login: 'alice' })
+})
+
+const BOT_RANKED = (req: Seen) => {
+  if (req.url === '/v1/bot') return { status: 200, body: { gameId: 'b1', seed: 77 } }
+  return { status: 200, body: EMPTY_LEADERBOARD }
+}
+
+test('vs bot start asks the server for a game when signed in', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'hard', nonce: 1 })
+  await ui.advance(48)
+  expect(seen.filter(r => r.url.endsWith('/v1/bot')).map(r => r.body)).toEqual([{ level: 'hard' }])
+  expect((await props(ui)).vsbot).toEqual({ nonce: 1, level: 'hard', gameId: 'b1', seed: 77 })
+})
+
+test('vs bot start signed out sends nothing and answers unranked', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED, {})
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'easy', nonce: 2 })
+  await ui.advance(48)
+  expect(seen).toHaveLength(0)
+  expect((await props(ui)).vsbot).toEqual({ nonce: 2, level: 'easy', gameId: null, seed: 0 })
+})
+
+test('vs bot start against a server without the route answers unranked', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, req => (req.url === '/v1/bot' ? { status: 404, body: { error: 'not found' } } : { status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'medium', nonce: 3 })
+  await ui.advance(48)
+  expect((await props(ui)).vsbot).toEqual({ nonce: 3, level: 'medium', gameId: null, seed: 0 })
+})
+
+test('a finished bot log goes to /v1/bot/scores once', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await startVsBot(ui)
+  await ui.post(chunk('b1', 'bot', [3, 5, 10, 0]))
+  await ui.advance(48)
+  await ui.post(chunk('b1', 'bot', [3, 5, 10, 0]))
+  await ui.advance(48)
+  const posts = seen.filter(r => r.url.endsWith('/v1/bot/scores'))
+  expect(posts.map(r => r.body)).toEqual([{ gameId: 'b1', log: { steps: 50, inputs: [3, 5, 10, 0] } }])
+  expect(seen.some(r => r.url.endsWith('/v1/scores'))).toBe(false)
+})
+
+test('a bot log for a game this session never started is dropped', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post(chunk('stranger', 'bot', [3, 5]))
+  await ui.advance(48)
+  expect(seen.filter(r => r.url.endsWith('/v1/bot/scores'))).toHaveLength(0)
+})
+
+test('a ranked bot game left on the Starting screen is closed on the server', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on, SIGNED_IN)
+  let release = () => undefined as void
+  const bodies: unknown[] = []
+  on('http.fetch', async (_$, e) => {
+    const path = new URL(e.url).pathname
+    if (path === '/v1/bot/scores') bodies.push(JSON.parse(e.init!.body!))
+    if (path === '/v1/bot') await new Promise<void>(r => (release = r))
+    return { value: reply(path === '/v1/bot' ? { gameId: 'b9', seed: 3 } : EMPTY_LEADERBOARD) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'easy', nonce: 1 })
+  await ui.advance(16)
+  await ui.post({ type: 'menu', choice: 'back' })
+  await ui.advance(16)
+  release()
+  for (let i = 0; i < 5; i++) await ui.advance(48)
+  expect(bodies).toEqual([{ gameId: 'b9', log: { steps: 1, inputs: [] } }])
+  expect((await props(ui)).vsbot).toBe(null)
+})
+
+async function startVsBot(ui: Ui, levelDowns = 0) {
+  await menuTo(ui, 'bot')
+  await ui.key({ key: 'return' })
+  for (let i = 0; i < levelDowns; i++) await ui.key({ key: 'down' })
+  await ui.key({ key: 'return' })
+  await ui.advance(100)
+  await ui.advance(32)
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the menu is Marathon, Vs Bot, Battle, Leaderboard on ${surface}`, async ($: Engine) => {
+    const ui = await $.ui.mount(target(surface))
+    const text = await shown(ui)
+    const at = ['Marathon', 'Vs Bot', 'Battle', 'Leaderboard'].map(w => text.indexOf(w))
+    expect(at.every(i => i >= 0)).toBe(true)
+    expect([...at].sort((p, q) => p - q)).toEqual(at)
+  })
+
+  test(`the level picker lists the three bots and q goes back on ${surface}`, async ($: Engine) => {
+    const ui = await $.ui.mount(target(surface))
+    await menuTo(ui, 'bot')
+    await ui.key({ key: 'return' })
+    const text = await shown(ui)
+    for (const name of ['VS BOT', 'Merge Conflict (easy)', 'Hotfix in Prod (medium)', 'Deploy on Friday (hard)']) expect(text).toContain(name)
+    await ui.key({ key: 'q' })
+    expect(await shown(ui)).toContain('Play while Claude works')
+  })
+
+  test(`vs bot: two boards, a ranked loss, and the log sent once on ${surface}`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    const seen = serve(on, BOT_RANKED)
+    const ui = await $.ui.mount(target(surface))
+    await startVsBot(ui, 2)
+    expect(seen.filter(r => r.url.endsWith('/v1/bot')).map(r => r.body)).toEqual([{ level: 'hard' }])
+    expect(await labelled(ui, 'hard bot')).toContain('hard bot')
+    await topOut(ui)
+    expect(await shown(ui)).toContain('YOU LOSE')
+    const posts = seen.filter(r => r.url.endsWith('/v1/bot/scores'))
+    expect(posts).toHaveLength(1)
+    const body = posts[0]!.body as { gameId: string; log: { steps: number; inputs: number[]; garbage?: number[] } }
+    expect(body.gameId).toBe('b1')
+    expect(body.log.garbage).toBeUndefined()
+    expect(body.log.inputs.filter((v, i) => i % 2 === 1 && v === 5).length).toBeGreaterThan(5)
+  })
+}
+
+test('vs bot against a server without the route plays unranked and says so', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, req => (req.url === '/v1/bot' ? { status: 404, body: { error: 'not found' } } : { status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await startVsBot(ui)
+  expect(await labelled(ui, 'easy bot')).toContain('easy bot')
+  await topOut(ui)
+  expect(await shown(ui)).toContain('unranked')
+  expect(seen.filter(r => r.url.endsWith('/v1/bot/scores'))).toHaveLength(0)
+})
+
+test('quitting a ranked vs bot match still sends it', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await startVsBot(ui)
+  await ui.key({ key: 'left' })
+  await ui.advance(200)
+  await ui.key({ key: 'q' })
+  for (let i = 0; i < 5; i++) await ui.advance(48)
+  const posts = seen.filter(r => r.url.endsWith('/v1/bot/scores'))
+  expect(posts).toHaveLength(1)
+  expect((posts[0]!.body as { log: { steps: number } }).log.steps).toBeGreaterThan(0)
+})
+
+test('a ranked reply that comes after the match started unranked closes that game', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on, SIGNED_IN)
+  let release = () => undefined as void
+  const bodies: unknown[] = []
+  on('http.fetch', async (_$, e) => {
+    const path = new URL(e.url).pathname
+    if (path === '/v1/bot/scores') bodies.push(JSON.parse(e.init!.body!))
+    if (path === '/v1/bot') await new Promise<void>(r => (release = r))
+    return { value: reply(path === '/v1/bot' ? { gameId: 'b9', seed: 3 } : EMPTY_LEADERBOARD) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await menuTo(ui, 'bot')
+  await ui.key({ key: 'return' })
+  await ui.key({ key: 'return' })
+  for (let i = 0; i < 16; i++) await ui.advance(200)
+  expect(await labelled(ui, 'easy bot')).toContain('easy bot')
+  release()
+  for (let i = 0; i < 10; i++) await ui.advance(48)
+  expect(bodies).toEqual([{ gameId: 'b9', log: { steps: 1, inputs: [] } }])
+})
+
+const BOT_BOARD = {
+  marathon: [],
+  wins: [],
+  bot: {
+    easy: [{ login: 'bob', ms: 62_500, at: 1 }, { login: 'alice', ms: 70_000, at: 2 }],
+    medium: [],
+    hard: [{ login: 'carol', ms: 3_723_450, at: 3 }],
+  },
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the leaderboard's second page shows the fastest wins per bot on ${surface}`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on, () => ({ status: 200, body: BOT_BOARD }))
+    const ui = await $.ui.mount(target(surface))
+    await openLeaderboard(ui)
+    expect(await shown(ui)).toContain('Marathon top 5')
+    await ui.key({ key: 'right' })
+    await ui.advance(32)
+    const text = await shown(ui)
+    for (const t of ['Merge Conflict (easy)', 'Hotfix in Prod (medium)', 'Deploy on Friday (hard)', '62:03.45']) expect(text).toContain(t)
+    expect(text).not.toContain('Marathon top 5')
+    expect(await labelled(ui, '1\\s+bob')).toMatch(/^\s*1\s+bob\s+1:02\.50\s*$/)
+    expect((await ui.find({ type: 'Text', text: /2\s+alice/, in: 'game' }))?.props.inverse).toBe(true)
+    await ui.key({ key: 'left' })
+    await ui.advance(32)
+    expect(await shown(ui)).toContain('Marathon top 5')
+  })
+}
+
+test('a server without bot rankings shows empty boards on the second page', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, () => ({ status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  await ui.key({ key: 'right' })
+  await ui.advance(32)
+  expect((await shown(ui)).match(/no wins yet/g) ?? []).toHaveLength(3)
+})
+
+test('the leaderboard opens on its first page every time', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, () => ({ status: 200, body: BOT_BOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await openLeaderboard(ui)
+  await ui.key({ key: 'right' })
+  await ui.key({ key: 'q' })
+  await ui.key({ key: 'return' })
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('Marathon top 5')
 })

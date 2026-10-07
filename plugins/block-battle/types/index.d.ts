@@ -1,6 +1,8 @@
 export type ScoreRow = { login: string; score: number; lines: number; level: number; at: number }
 export type WinRow = { login: string; wins: number }
-export type Leaderboard = { marathon: ScoreRow[]; wins: WinRow[] }
+export type BotLevel = 'easy' | 'medium' | 'hard'
+export type BotRow = { login: string; ms: number; at: number }
+export type Leaderboard = { marathon: ScoreRow[]; wins: WinRow[]; bot: Record<BotLevel, BotRow[]> }
 
 export type Incoming = { id: number; lines: number }
 export type Opponent = { login: string; snapshot: string; isOver: boolean }
@@ -23,6 +25,7 @@ export type GameView = {
   battle: Battle
   servers: Servers
   marathon: { nonce: number; gameId: string | null; seed: number } | null
+  vsbot: { nonce: number; level: BotLevel; gameId: string | null; seed: number } | null
   uploaded: { key: string; have: number } | null
 }
 
@@ -39,9 +42,10 @@ export type Servers = {
 export type ClientMsg =
   | { type: 'menu'; choice: 'leaderboard' | 'back' }
   | { type: 'menu'; choice: 'marathon'; nonce: number }
+  | { type: 'menu'; choice: 'bot'; level: BotLevel; nonce: number }
   | { type: 'menu'; choice: 'battle'; server: string }
   | { type: 'sync'; seq: number; attacks: number[]; snapshot: string; isOver: boolean }
-  | { type: 'log'; kind: 'marathon' | 'battle'; key: string; steps: number; inputsLen: number; total: number; at: number; values: number[] }
+  | { type: 'log'; kind: 'marathon' | 'battle' | 'bot'; key: string; steps: number; inputsLen: number; total: number; at: number; values: number[] }
 
 declare module 'claude-code' {
   interface PluginState {

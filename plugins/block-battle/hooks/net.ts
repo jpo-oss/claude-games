@@ -2,7 +2,7 @@ import type { HttpInit, HttpResponse } from 'claude-code'
 
 import { CHUNK, MAX_STEPS } from './log'
 import type { LogMsg } from './log'
-import type { ClientMsg, Incoming, Leaderboard, Opponent } from '../types'
+import type { BotLevel, BotRow, ClientMsg, Incoming, Leaderboard, Opponent } from '../types'
 
 export type Fetch = (url: string, init?: HttpInit) => Promise<HttpResponse>
 
@@ -99,6 +99,16 @@ const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v)
 const count = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
 export const cleanText = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 120)
 
+const isLevel = (v: unknown): v is BotLevel => v === 'easy' || v === 'medium' || v === 'hard'
+
+const botRows = (v: unknown): BotRow[] =>
+  (Array.isArray(v) ? v : [])
+    .filter(isRecord)
+    .filter(r => login(r.login) && count(r.ms) && count(r.at))
+    .map(r => ({ login: r.login as string, ms: r.ms as number, at: r.at as number }))
+    .slice(0, 5)
+
+// A server older than 1.1.0 sends no `bot`; its boards then read as empty.
 export function parseLeaderboard(data: unknown): Leaderboard | null {
   if (!isRecord(data) || !Array.isArray(data.marathon) || !Array.isArray(data.wins)) return null
   const marathon = data.marathon
@@ -109,8 +119,9 @@ export function parseLeaderboard(data: unknown): Leaderboard | null {
     .filter(isRecord)
     .filter(r => login(r.login) && count(r.wins))
     .map(r => ({ login: r.login as string, wins: r.wins as number }))
+  const bot = isRecord(data.bot) ? data.bot : {}
 
-  return { marathon: marathon.slice(0, 5), wins: wins.slice(0, 5) }
+  return { marathon: marathon.slice(0, 5), wins: wins.slice(0, 5), bot: { easy: botRows(bot.easy), medium: botRows(bot.medium), hard: botRows(bot.hard) } }
 }
 
 export type QueueReply =
@@ -194,6 +205,7 @@ export function parseClientMsg(data: unknown): ClientMsg | null {
   if (data.type === 'menu') {
     const c = data.choice
     if (c === 'battle') return typeof data.server === 'string' && serverUrlOk(data.server) ? { type: 'menu', choice: c, server: data.server } : null
+    if (c === 'bot') return isLevel(data.level) && count(data.nonce) ? { type: 'menu', choice: c, level: data.level, nonce: data.nonce } : null
     if (c === 'marathon') return count(data.nonce) ? { type: 'menu', choice: c, nonce: data.nonce } : null
 
     return c === 'leaderboard' || c === 'back' ? { type: 'menu', choice: c } : null
@@ -212,7 +224,7 @@ export function parseClientMsg(data: unknown): ClientMsg | null {
 
 function parseLogMsg(d: Record<string, unknown>): LogMsg | null {
   const { kind, key, steps, inputsLen, total, at, values } = d
-  if (kind !== 'marathon' && kind !== 'battle') return null
+  if (kind !== 'marathon' && kind !== 'battle' && kind !== 'bot') return null
   if (typeof key !== 'string' || !KEY.test(key)) return null
   if (!count(steps) || steps < 1 || steps > MAX_STEPS) return null
   if (!count(total) || total > MAX_STREAM || total % 2 !== 0) return null
