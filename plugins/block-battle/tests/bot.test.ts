@@ -65,7 +65,7 @@ test('harder levels clear more lines and last longer against the same garbage', 
   expect(medium.survived).toBeGreaterThanOrEqual(easy.survived)
 })
 
-test('hard thinks in small slices: no step near a frame's budget, under 0.5 ms a step on average', () => {
+test('hard thinks in small slices: no step near one frame, under 0.5 ms a step on average', () => {
   let g = newGame('battle', 9)
   const b = newBot('hard', 9)
   let worst = 0
