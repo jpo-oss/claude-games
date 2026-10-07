@@ -16,6 +16,10 @@ The game stores, on your machine through Claude Code: the session key for each s
 
 The server code is open source at https://github.com/jpo-oss/claude-games-server. It stores your GitHub login, numeric ID and account creation date, scores and battle results, and never logs tokens, request bodies or IP addresses.
 
+## What it watches in your session
+
+The game adds one command, `/cg-block-battle`, and runs no other commands, tools or programs. It listens to three session events only to time one reminder: when you send a prompt and when Claude's turn ends, it can show a single toast after two minutes ("Long task. /cg-block-battle while you wait?"), and while Claude is asking you a question with AskUserQuestion it waits so the toast never covers the question. It passes each of these events on unchanged and never reads, stores or sends what you or Claude wrote.
+
 ## What else is in this folder
 
 `tests/` holds the game's automated tests, run with `claude plugin test`. They never load in a player's session. They stand in for Claude Code's own events (network replies, stored data, tool calls and commands) so the game can be tested without a network or a real session; the game itself makes none of those calls beyond the ones listed above.
