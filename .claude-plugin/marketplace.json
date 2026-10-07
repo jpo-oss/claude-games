@@ -18,11 +18,6 @@
         "sha": "db4d9c3b167cf390a133f4b1c1be0df0d961f0d7"
       },
       "description": "Falling-block puzzle with solo Marathon, a bot to beat, 1v1 battles and a leaderboard"
-    },
-    {
-      "name": "daily-diff",
-      "source": "./plugins/daily-diff",
-      "description": "A daily five-letter coding word puzzle inside Claude Code, with streaks and a leaderboard"
     }
   ]
 }

@@ -10,7 +10,7 @@ Daily Diff needs a one-time GitHub sign-in, because the server keeps your guesse
 
 ## What it sends over the network
 
-Everything goes to one game server, the official one at https://games.jpoapps.com. The game only uses HTTPS (plain HTTP only for a server on your own machine, for testing).
+Everything goes to one game server, the official one at https://games.jpoapps.com. The game only uses HTTPS.
 
 - Sign-in: the game asks github.com for a code and polls until you approve it. The GitHub token goes to the game server once, which checks it with GitHub and replies with a session key.
 - Playing: each guess you make, and requests for today's puzzle, your stats and the leaderboard.
