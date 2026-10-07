@@ -149,6 +149,13 @@ test('signed out, opening shows the GitHub code', async ($: Engine, on: On) => {
   expect(seen.some(r => r.url.includes('/v1/daily-diff/'))).toBe(false)
 })
 
+test('running the command again during sign-in keeps the code on screen', async ($: Engine, on: On) => {
+  const { clock, ui } = await open($, on, {})
+  await $.command.run(run())
+  await clock.settle()
+  expect((await viewOf(ui)).notice).toBe('Sign in: open https://github.com/login/device and enter WDJB-MJHT')
+})
+
 test('a 401 drops the session and starts sign-in', async ($: Engine, on: On) => {
   const clock = mock.clock(on)
   const saves = store(on, SIGNED_IN)

@@ -34,12 +34,14 @@ const rt: {
   isSigningIn: boolean
   // Bumped when the pane closes so a sign-in still waiting on a request stops when it resumes.
   signInGen: number
+  // The code line on screen while sign-in runs, shown again if the pane is reopened meanwhile.
+  signInLine: string | null
   // Bumped on every refresh and close. An async flow keeps the value it started with and writes nothing once it has moved on.
   gen: number
   // The generation whose guess is in flight, so a stale one never blocks the next.
   sending: number | null
   period: Period | null
-} = { session: null, signIn: null, isSigningIn: false, signInGen: 0, gen: 0, sending: null, period: null }
+} = { session: null, signIn: null, isSigningIn: false, signInGen: 0, signInLine: null, gen: 0, sending: null, period: null }
 
 const isLive = (gen: number) => gen === rt.gen
 const setView = ($: EngineInterface, patch: Partial<View>) => update($, view, v => ({ ...v, ...patch }))
@@ -67,6 +69,7 @@ function stopSignIn() {
   rt.signIn?.cancel()
   rt.signIn = null
   rt.isSigningIn = false
+  rt.signInLine = null
   rt.signInGen++
 }
 
@@ -87,7 +90,12 @@ async function signOut($: EngineInterface): Promise<string> {
 }
 
 async function startSignIn($: EngineInterface) {
-  if (rt.isSigningIn) return
+  if (rt.isSigningIn) {
+    const line = rt.signInLine
+    if (line) await update($, view, v => (rt.signInLine === line ? { ...v, notice: line } : v))
+
+    return
+  }
   rt.isSigningIn = true
   const gen = ++rt.signInGen
   const live = () => gen === rt.signInGen
@@ -96,6 +104,7 @@ async function startSignIn($: EngineInterface) {
     if (!live()) return
     rt.isSigningIn = false
     rt.signIn = null
+    rt.signInLine = null
 
     return say(notice)
   }
@@ -110,7 +119,8 @@ async function startSignIn($: EngineInterface) {
     const code = await requestDeviceCode(f, clientId, g)
     if (!live()) return
     if (!code) return end(NO_GITHUB)
-    await say(`Sign in: open ${code.uri} and enter ${code.userCode}`)
+    rt.signInLine = `Sign in: open ${code.uri} and enter ${code.userCode}`
+    await say(rt.signInLine)
     const startedAt = await $.clock.now()
     let interval = code.interval
     const tick = async () => {
@@ -137,6 +147,7 @@ async function startSignIn($: EngineInterface) {
         if (!live()) return
         rt.isSigningIn = false
         rt.signIn = null
+        rt.signInLine = null
         void refresh($, `Signed in as ${s.login}.`)
       } catch {
         await end(NO_GITHUB)
