@@ -4,6 +4,11 @@ Games to play inside [Claude Code](https://code.claude.com) while it works on so
 
 They run as Claude Code mods.
 
+<p>
+  <img src="docs/images/block-battle-vs-bot.png" alt="Block Battle against the medium bot, with the bot's board on the right" height="380">
+  <img src="docs/images/daily-diff-playing.png" alt="Daily Diff with three guesses in and the keyboard colored" height="380">
+</p>
+
 ## Install
 
 You need Claude Code 2.1.291 or later. Games show up in the terminal and in the Code tab of Claude Desktop. They don't show in cloud sessions, in the VS Code chat panel, or with `claude -p`.
@@ -53,6 +58,11 @@ claude plugin uninstall daily-diff@claude-games
 
 A falling-block puzzle. Play solo Marathon, beat a bot at three levels, battle other players 1v1, and climb the leaderboard.
 
+<p>
+  <img src="docs/images/block-battle-menu.png" alt="Block Battle main menu" height="320">
+  <img src="docs/images/block-battle-marathon.png" alt="A Marathon game in progress" height="320">
+</p>
+
 Run `/cg-block-battle` and click the pane to start. Left and right move, down drops faster, space drops all the way. Up or x rotates, z rotates the other way, a flips, c holds. p pauses Marathon, q goes back to the menu, Esc leaves the pane.
 
 Marathon works offline, but a game only counts for the leaderboard if you were signed in when it started. Otherwise it says "unranked" at the end. Battles and the leaderboard need a one-time GitHub sign-in: the game shows a code, you enter it at github.com/login/device, and that's it. The sign-in asks for no permissions, so the server only learns your public username. The game keeps a key for that server and never stores your GitHub token.
@@ -76,6 +86,10 @@ Want to run your own? See [claude-games-server](https://github.com/jpo-oss/claud
 ### Daily Diff
 
 A daily five-letter coding word puzzle. Everyone gets the same word each day and has six guesses. Streaks and a leaderboard keep score.
+
+![Solving a Daily Diff puzzle in four guesses](docs/images/daily-diff.gif)
+
+![Daily Diff results with stats and today's leaderboard](docs/images/daily-diff-solved.png)
 
 Run `/cg-daily-diff` and click the pane to start. Type a word and press Enter. Green is the right letter in the right spot, yellow is in the word somewhere else, gray isn't in the word. A new puzzle starts at 00:00 UTC, and a game you haven't finished by then counts as a loss.
 
