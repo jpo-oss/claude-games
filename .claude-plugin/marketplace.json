@@ -25,8 +25,8 @@
         "source": "git-subdir",
         "url": "jpo-oss/claude-games",
         "path": "plugins/daily-diff",
-        "ref": "daily-diff-v0.1.0",
-        "sha": "b4cbfd0e7820e6e288e3f97008b3fa1a24741bfa"
+        "ref": "daily-diff-v0.1.1",
+        "sha": "b8b781b7ad403ae6f684cd28c73e8b0bb4e9e365"
       },
       "description": "A daily five-letter coding word puzzle with streaks and a leaderboard"
     }
