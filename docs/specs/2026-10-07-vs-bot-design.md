@@ -30,9 +30,11 @@ Each time the bot gets a new piece it scores every reachable final placement (ea
 |---|---|---|---|
 | easy | one input every 12 steps | current piece | 30% of pieces take a random placement from the top 5 |
 | medium | one input every 5 steps | current piece and hold | 5% of pieces take the second best |
-| hard | one input every 2 steps | current and next piece | none |
+| hard | one input every 3 steps | current and next piece | none |
 
-A step is the engine's fixed 16 ms step, so easy places roughly one piece every 1.5 s and hard about 2.5 a second. The numbers get tuned during the build so the levels feel distinct; the tuned values become constants in `bot.ts`.
+The bot also spreads its search over steps, 64 placements a step.
+
+A step is the engine's fixed 16 ms step, so easy places roughly one piece every 1.5 s and hard about 2.5 a second. These are the tuned values, kept as constants in `bot.ts`.
 
 ### Determinism
 
