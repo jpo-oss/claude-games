@@ -93,7 +93,7 @@ export function parseToday(d: unknown): Today | null {
   if (!Array.isArray(d.guesses) || d.guesses.length > 6) return null
   const guesses = d.guesses.filter(isRecord).filter(g => typeof g.word === 'string' && WORD.test(g.word) && typeof g.marks === 'string' && MARKS.test(g.marks))
   if (guesses.length !== d.guesses.length) return null
-  const answer = typeof d.answer === 'string' && WORD.test(d.answer) ? d.answer : null
+  const answer = d.state !== 'playing' && typeof d.answer === 'string' && WORD.test(d.answer) ? d.answer : null
 
   return { number: d.number, day: d.day, endsAt: d.endsAt, guesses: guesses.map(g => ({ word: g.word as string, marks: g.marks as string })), state: d.state, answer }
 }

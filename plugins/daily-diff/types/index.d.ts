@@ -16,3 +16,9 @@ export type View = {
   copied: 'ok' | 'failed' | null
 }
 export type ClientMsg = { type: 'guess'; word: string } | { type: 'board'; period: Period } | { type: 'share' } | { type: 'retry' }
+
+declare module 'claude-code' {
+  interface PluginState {
+    'daily-diff': { view: View }
+  }
+}

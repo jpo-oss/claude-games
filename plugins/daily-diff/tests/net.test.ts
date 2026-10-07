@@ -17,6 +17,7 @@ test('today is checked field by field', () => {
   expect(parseToday({ ...today, guesses: Array(7).fill(today.guesses[0]) })).toBeNull()
   expect(parseToday({ ...today, state: 'won', answer: 'qqqqa' })?.answer).toBe('qqqqa')
   expect(parseToday({ ...today, state: 'weird' })).toBeNull()
+  expect(parseToday({ ...today, answer: 'qqqqa' })?.answer).toBeNull()
 })
 
 test('boards keep at most 20 valid rows', () => {

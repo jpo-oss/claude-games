@@ -40,11 +40,11 @@ On a server in Germany, behind Cloudflare. Traffic passes through Cloudflare, wh
 
 ## Signing out
 
-Run `/cg-block-battle signout`. The server deletes your session.
+Run `/cg-block-battle signout` to sign out of Block Battle, or `/cg-daily-diff signout` to sign out of Daily Diff. The server deletes your session.
 
 ## Deleting your data
 
-Email ansell@justpressone.com and ask. We will delete your player record, sessions, scores and battle results.
+Email ansell@justpressone.com and ask. We will delete your player record, sessions, scores and battle results. Daily Diff history is deleted the same way.
 
 ## Community servers
 
