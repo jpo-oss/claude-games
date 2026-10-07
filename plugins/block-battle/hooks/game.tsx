@@ -67,7 +67,7 @@ const emptyProps = (): GameView => ({
   leaderboard: null,
   notice: null,
   battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null },
-  servers: { home: '', isHomeOfficial: true, last: null, active: '' },
+  servers: { home: '', last: null, active: '' },
   marathon: null,
   uploaded: null,
 })
@@ -201,9 +201,9 @@ function leave(live: Live) {
 type ServerChoice = { label: string; url: string | null }
 
 function serverChoices(live: Live): ServerChoice[] {
-  const { home, isHomeOfficial, last } = live.props.servers
+  const { home, last } = live.props.servers
   const list: ServerChoice[] = [
-    { label: isHomeOfficial ? 'Official server' : `Your server  ${hostOf(home)}`, url: home },
+    { label: 'Official server', url: home },
     { label: 'Enter a server address...', url: null },
   ]
   if (last && last !== home) list.push({ label: `${hostOf(last)}  (last used)`, url: last })

@@ -25,9 +25,9 @@ If you'd rather add the marketplace once and pick games from it:
 
 In the desktop app you can also click **+** next to the prompt box, then **Plugins**, then **Add plugin**, once the marketplace is added.
 
-### Updating
+### Updates
 
-Updates aren't automatic for community marketplaces. Either run `/plugin`, open the **Marketplaces** tab, select claude-games and choose **Enable auto-update**, or update by hand:
+Auto-update is off by default for this marketplace. Turn it on with `/plugin`, **Marketplaces**, claude-games, **Enable auto-update**. Or update by hand:
 
 ```
 claude plugin update block-battle@claude-games
@@ -60,12 +60,6 @@ To sign out of the server you're on:
 ## Choosing a server
 
 When you pick Battle, the game asks where to play: the official server, or a server address you type in. It remembers the last address you typed. Servers other than the official one are run by someone else, and the game says so before you sign in to one.
-
-To make a different server your default, such as your team's:
-
-1. Run `/plugin` and open the **Installed** tab.
-2. Select the game, then **Configure options**.
-3. Set **Game server URL** to the address the server's owner gave you. It must start with `https://`.
 
 Each server has its own players and leaderboard. Signing in to one server doesn't sign you in to another, and your sign-in for one is never sent to another.
 

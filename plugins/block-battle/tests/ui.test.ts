@@ -764,24 +764,6 @@ test('the code stays visible when the player moves from Leaderboard to Battle', 
   expect(await shown(ui)).toContain('WDJB-MJHT')
 })
 
-test('a session saved for another server is ignored after switching servers', { options: { serverUrl: 'https://other.example/' } }, async ($: Engine, on: On) => {
-  mock.clock(on)
-  const { seen } = github(on, [], () => ({ status: 200, body: EMPTY_LEADERBOARD }), SIGNED_IN)
-  const ui = await $.ui.mount(target('terminal'))
-  await openLeaderboard(ui)
-  expect(seen.some(r => r.auth === 'Bearer sess_1')).toBe(false)
-  expect(seen.some(r => r.url === 'https://github.com/login/device/code')).toBe(true)
-})
-
-test('an http server address is refused before any request', { options: { serverUrl: 'http://example.com' } }, async ($: Engine, on: On) => {
-  mock.clock(on)
-  const { seen } = github(on, [], () => ({ status: 200, body: EMPTY_LEADERBOARD }), SIGNED_IN)
-  const ui = await $.ui.mount(target('terminal'))
-  await openLeaderboard(ui)
-  expect(seen).toHaveLength(0)
-  expect(await shown(ui)).toContain('must start with https://')
-})
-
 test('a winner who is neither player is not shown as a win', async ($: Engine, on: On) => {
   mock.clock(on)
   serve(on, req => {

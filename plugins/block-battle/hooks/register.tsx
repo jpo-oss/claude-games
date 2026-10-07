@@ -36,7 +36,7 @@ const startView = (): GameView => ({
   leaderboard: null,
   notice: null,
   battle: idleBattle(),
-  servers: { home: OFFICIAL, isHomeOfficial: true, last: null, active: OFFICIAL },
+  servers: { home: OFFICIAL, last: null, active: OFFICIAL },
   marathon: null,
   uploaded: null,
 })
@@ -48,7 +48,7 @@ const SIGNED_OUT = 'Signed out. Pick Battle or Leaderboard to sign in again.'
 const OUTDATED = 'Block Battle is out of date. Run claude plugin update block-battle@claude-games in your shell, then /reload-plugins.'
 const SIGNING_IN = 'Signing in with GitHub...'
 const NO_SIGNIN = "This server isn't set up for sign-in."
-const BAD_URL = 'The server address must start with https://. Change it in the plugin settings.'
+const BAD_URL = 'The server address must start with https://.'
 const TIMEOUT_MS = 30_000
 const NO_GITHUB = "Couldn't reach GitHub to sign in. Solo play still works."
 const CANCELLED = 'Sign-in was cancelled or expired. Pick Battle or Leaderboard to try again.'
@@ -64,7 +64,6 @@ type Owned = { key: string; base: string }
 
 const rt: {
   base: string
-  home: string
   hasLoadedLast: boolean
   // Our server's session key, with the server it belongs to. The GitHub token is never kept: it is exchanged and dropped.
   session: { base: string; s: Session } | null
@@ -100,7 +99,6 @@ const rt: {
   retry: Timer | null
 } = {
   base: OFFICIAL,
-  home: OFFICIAL,
   hasLoadedLast: false,
   session: null,
   signIn: null,
@@ -168,7 +166,7 @@ function stopSignIn() {
 // Returns the battle generation to carry on with, or null once something newer has taken over.
 async function useServer($: EngineInterface, url: string, gen: number): Promise<number | null> {
   const next = trimSlash(url)
-  if (next !== rt.home) {
+  if (next !== OFFICIAL) {
     await $.store.set(LAST_SERVER, next)
     await update($, view, v => ({ ...v, servers: { ...v.servers, last: next } }))
   }
@@ -593,9 +591,8 @@ function tryNudge($: EngineInterface) {
   $.ui.toast('Long task. /cg-block-battle while you wait?', { timeoutMs: 8_000 })
 }
 
-export const register: Register = (on, options) => {
-  rt.home = typeof options.serverUrl === 'string' && options.serverUrl !== '' ? trimSlash(options.serverUrl) : OFFICIAL
-  rt.base = rt.home
+export const register: Register = on => {
+  rt.base = OFFICIAL
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'cg-block-battle', description: 'Play Block Battle while Claude works. Add "signout" to sign out' })
@@ -640,7 +637,7 @@ export const register: Register = (on, options) => {
       void loadLast($).catch(() => undefined)
     }
     const stored = await read($, view)
-    const v = { ...stored, servers: { ...stored.servers, home: rt.home, isHomeOfficial: rt.home === OFFICIAL, active: rt.base } }
+    const v = { ...stored, servers: { ...stored.servers, active: rt.base } }
 
     // Without a size the region is as tall as what the module draws, so a one-line "too small"
     // note would measure the region as one line and keep it there.
