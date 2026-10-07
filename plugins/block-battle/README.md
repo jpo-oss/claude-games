@@ -14,7 +14,7 @@ Marathon works offline, and when you are not signed in it sends nothing. Everyth
 
 The game stores, on your machine through Claude Code: the session key for each server you signed in to, and the last server address you typed. It sends a session key only to the server it came from.
 
-The server code is open source at https://github.com/jpo-oss/claude-games-server. It stores your GitHub login, numeric ID and account creation date, scores and battle results, and never logs tokens, request bodies or IP addresses.
+The server code is open source at https://github.com/jpo-oss/claude-games-server. It stores your GitHub login, numeric ID and account creation date, scores and battle results, and never logs tokens, request bodies or IP addresses. Full details are in the [privacy policy](../../PRIVACY.md).
 
 ## What it watches in your session
 

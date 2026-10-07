@@ -69,7 +69,7 @@ Want to run your own? See [claude-games-server](https://github.com/jpo-oss/claud
 
 ## A note on trust
 
-Mods aren't sandboxed. They run with your permissions, like any plugin. Read the code before you install, which is part of why this is open source.
+Mods aren't sandboxed. They run with your permissions, like any plugin. Read the code before you install, which is part of why this is open source. See the [privacy policy](PRIVACY.md) for what the official server keeps.
 
 ## Contributing
 
