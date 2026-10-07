@@ -83,7 +83,7 @@ const emptyProps = (): GameView => ({
   me: null,
   leaderboard: null,
   notice: null,
-  battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null },
+  battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null, online: null },
   servers: { home: '', last: null, active: '' },
   marathon: null,
   vsbot: null,
@@ -890,6 +890,10 @@ function drawLobby(live: Live, surface: Surf) {
   const { notice, battle } = live.props
   const dots = '.'.repeat(1 + (Math.floor(live.t / 320) % 3))
   const w = Math.min(46, Math.max(24, surface.columns - 2))
+  const showNotice = notice && battle.status === 'idle'
+  const on = battle.status === 'queueing' && !showNotice ? battle.online : null
+  const total = on ? `${on.playing + on.looking} online` : ''
+  const full = on ? `${total}: ${on.playing} in a battle, ${on.looking} looking` : ''
 
   return (
     <Box flexDirection="column" alignItems="center" paddingX={1}>
@@ -899,7 +903,8 @@ function drawLobby(live: Live, surface: Surf) {
         w,
         FRAME,
         <Box paddingX={1} flexDirection="column">
-          {notice && battle.status === 'idle' ? <Text color="red">{notice}</Text> : <Text>{`Looking for an opponent${dots}`}</Text>}
+          {showNotice ? <Text color="red">{notice}</Text> : <Text>{`Looking for an opponent${dots}`}</Text>}
+          {on && <Text dimColor>{full.length <= w - 4 ? full : total}</Text>}
         </Box>,
       )}
       <Text dimColor>q goes back</Text>

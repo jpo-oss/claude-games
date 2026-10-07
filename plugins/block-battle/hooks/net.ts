@@ -2,7 +2,7 @@ import type { HttpInit, HttpResponse } from 'claude-code'
 
 import { CHUNK, MAX_STEPS } from './log'
 import type { LogMsg } from './log'
-import type { BotLevel, BotRow, ClientMsg, Incoming, Leaderboard, Opponent } from '../types'
+import type { BotLevel, BotRow, ClientMsg, Incoming, Leaderboard, Online, Opponent } from '../types'
 
 export type Fetch = (url: string, init?: HttpInit) => Promise<HttpResponse>
 
@@ -124,16 +124,27 @@ export function parseLeaderboard(data: unknown): Leaderboard | null {
   return { marathon: marathon.slice(0, 5), wins: wins.slice(0, 5), bot: { easy: botRows(bot.easy), medium: botRows(bot.medium), hard: botRows(bot.hard) } }
 }
 
-export type QueueReply =
+export type QueueReply = (
   | { status: 'waiting' }
   | { status: 'matched'; roomId: string; seed: number; opponent: string }
+) & { online: Online | null }
+
+const MAX_ONLINE = 100_000
+
+// Servers before 1.3.0 send no counts.
+function parseOnline(v: unknown): Online | null {
+  if (!isRecord(v) || !count(v.playing) || !count(v.looking)) return null
+
+  return { playing: Math.min(v.playing, MAX_ONLINE), looking: Math.min(v.looking, MAX_ONLINE) }
+}
 
 export function parseQueue(data: unknown): QueueReply | null {
   if (!isRecord(data)) return null
-  if (data.status === 'waiting') return { status: 'waiting' }
+  const online = parseOnline(data.online)
+  if (data.status === 'waiting') return { status: 'waiting', online }
   if (data.status === 'matched' && typeof data.roomId === 'string' && KEY.test(data.roomId) && count(data.seed)) {
     const opp = isRecord(data.opponent) ? login(data.opponent.login) : null
-    if (opp) return { status: 'matched', roomId: data.roomId, seed: data.seed, opponent: opp }
+    if (opp) return { status: 'matched', roomId: data.roomId, seed: data.seed, opponent: opp, online }
   }
 
   return null

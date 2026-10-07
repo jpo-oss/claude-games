@@ -1291,6 +1291,63 @@ test('a search restarted while its first poll looks up the session still finds i
   expect(await shown(ui)).toContain('bob')
 })
 
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the lobby shows how many are online from each queue reply on ${surface}`, async ($: Engine, on: On) => {
+    const clock = mock.clock(on)
+    let online: unknown
+    const seen = serve(on, req =>
+      req.url === '/v1/battle/queue' && req.method === 'POST' ? { status: 200, body: { status: 'waiting', ...(online === undefined ? {} : { online }) } } : MATCH,
+    )
+    const ui = await $.ui.mount(target(surface))
+    await startBattle(ui)
+    expect(await shown(ui)).toContain('Looking for an opponent')
+    expect(await shown(ui)).not.toContain('online')
+    online = { playing: 2, looking: 1 }
+    await clock.advance(1_500)
+    await ui.advance(48)
+    expect(await shown(ui)).toContain('3 online: 2 in a battle, 1 looking')
+    online = { playing: 4, looking: 2 }
+    await clock.advance(1_500)
+    await ui.advance(48)
+    expect(await shown(ui)).toContain('6 online: 4 in a battle, 2 looking')
+    await ui.resize({ columns: 28, rows: 22, in: 'game' })
+    await ui.advance(48)
+    const line = (await ui.find({ type: 'Text', text: /online/, in: 'game' }))?.text ?? ''
+    expect(line).toBe('6 online')
+    online = { playing: 'x', looking: 2 }
+    await clock.advance(1_500)
+    await ui.advance(48)
+    expect(await shown(ui)).not.toContain('online')
+    expect(seen.filter(r => r.method === 'POST' && r.url.endsWith('/v1/battle/queue')).length).toBeGreaterThanOrEqual(4)
+  })
+}
+
+test('online counts from a search the player left are not shown', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  store(on, SIGNED_IN)
+  let gate = () => {}
+  let posts = 0
+  on('http.fetch', async (_$, e) => {
+    const method = e.init?.method ?? 'GET'
+    const path = new URL(e.url).pathname
+    if (path === '/v1/battle/queue' && method === 'POST' && ++posts === 1) {
+      await new Promise<void>(r => (gate = r))
+      return { value: reply({ status: 'waiting', online: { playing: 8, looking: 1 } }) }
+    }
+    return { value: reply(path === '/v1/battle/queue' && method === 'POST' ? { status: 'waiting' } : {}) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  await leaveAndSearchAgain(ui)
+  gate()
+  await ui.advance(48)
+  await clock.advance(1_500)
+  await ui.advance(48)
+  expect(posts).toBeGreaterThanOrEqual(2)
+  expect(await shown(ui)).toContain('Looking for an opponent')
+  expect(await shown(ui)).not.toContain('online')
+})
+
 // The first queue POST answers with a match and, if asked, it and the first DELETE wait for the test.
 function heldQueue(on: On, hold: { post: boolean; del: boolean }, later: unknown = MATCH.body) {
   store(on, SIGNED_IN)
