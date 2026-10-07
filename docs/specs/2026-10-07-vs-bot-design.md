@@ -32,7 +32,7 @@ Each time the bot gets a new piece it scores every reachable final placement (ea
 | medium | one input every 5 steps | current piece and hold | 5% of pieces take the second best | level 8 |
 | hard | one input every 3 steps | current and next piece | none | level 10 |
 
-The bot's board stops speeding up at its top speed. Without it the bot's own line clears pushed it to level 15, where pieces fall faster than it can steer them, and every level topped out by itself within a few minutes. The cap is applied in `match.ts` after each step, so the server's replay does the same. The player's board is never capped.
+The bot's board stops speeding up at its top speed. Without it the bot's own line clears pushed it to level 15, where pieces fall faster than it can steer them, and every level topped out by itself within a few minutes. The cap lives in the bot's own step (`botStep` in `bot.ts`), which runs inputs and gravity as two engine steps so a clear that raises the level is capped before the next piece falls. The server's replay runs the same code. The player's board is never capped.
 
 The bot also spreads its search over steps, 64 placements a step.
 
@@ -63,7 +63,7 @@ The server keeps a byte-identical copy of `bot.ts` next to its engine copy. `npm
 
 ## Releases
 
-Game 0.2.0 and server 1.1.0. The server ships first. A 0.2.0 game against a 1.0.0 server gets 404 from the new routes and falls back to unranked, which is safe but loses the rankings.
+Game 0.2.0 and server 1.1.0. The server ships first. The speed cap shipped as game 0.3.0 with server 1.2.0 on protocol 3. A 0.2.0 game against a 1.0.0 server gets 404 from the new routes and falls back to unranked, which is safe but loses the rankings.
 
 ## Testing
 
