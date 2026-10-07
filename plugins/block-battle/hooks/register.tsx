@@ -631,7 +631,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
-    const { Client } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
     if (!rt.hasLoadedLast) {
       rt.hasLoadedLast = true
       void loadLast($).catch(() => undefined)
@@ -641,7 +641,7 @@ export const register: Register = on => {
 
     // Without a size the region is as tall as what the module draws, so a one-line "too small"
     // note would measure the region as one line and keep it there.
-    return <Client key="game" module="./game.tsx" props={v} width={e.props.bodyColumns} height={e.props.scroll.bodyRows} />
+    return <ui.Client key="game" module="./game.tsx" props={v} width={e.props.bodyColumns} height={e.props.scroll.bodyRows} />
   })
 
   on('prompt.submit', async ($, e, next) => {
