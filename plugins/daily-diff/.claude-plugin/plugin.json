@@ -1,0 +1,13 @@
+{
+  "name": "daily-diff",
+  "version": "0.1.0",
+  "description": "A daily five-letter coding word puzzle inside Claude Code, with streaks and a leaderboard",
+  "author": { "name": "JustPressOne Inc." },
+  "license": "MIT",
+  "repository": "https://github.com/jpo-oss/claude-games",
+  "homepage": "https://github.com/jpo-oss/claude-games",
+  "documentationUrl": "https://github.com/jpo-oss/claude-games/tree/main/plugins/daily-diff#readme",
+  "supportUrl": "https://github.com/jpo-oss/claude-games/issues",
+  "privacyPolicyUrl": "https://github.com/jpo-oss/claude-games/blob/main/PRIVACY.md",
+  "types": "./types/index.d.ts"
+}
