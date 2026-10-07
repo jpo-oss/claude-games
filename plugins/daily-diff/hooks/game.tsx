@@ -5,9 +5,10 @@ import { countdown, keyMarks } from './text'
 
 const GREEN = '#538d4e'
 const YELLOW = '#b59f3b'
-const GRAY = '#3a3a3c'
+const GRAY = '#6a6a6c'
 const MARK: Record<string, string> = { g: GREEN, y: YELLOW, x: GRAY }
 const EDGE = '#565758'
+const EMPTY = '#3a3a3c'
 
 const TICK_MS = 100
 const FLASH_MS = 600
@@ -23,6 +24,10 @@ const MIN_COLUMNS = 44
 const PLAY_ROWS = 27
 const SMALL_PLAY_ROWS = 14
 const DONE_ROWS = 18
+// The finished screen with full tiles: header, gap and six rows of 3-row tiles, with the results beside them.
+const TILES_ROWS = 20
+const RESULTS_W = 51
+const TILES_W = 25 + 2 + RESULTS_W
 
 type Live = {
   props: View
@@ -108,7 +113,7 @@ function tile(s: Surf, letter: string, opts: { bg?: string; border: string; dim?
   )
 }
 
-function grid(live: Live, s: Surf, today: Today) {
+function grid(live: Live, s: Surf, today: Today, gap = 1) {
   const { Box } = s.elements
   const flash = live.t < live.flashUntil
   const rows: RenderElement[] = []
@@ -117,13 +122,13 @@ function grid(live: Live, s: Surf, today: Today) {
     const isTyping = i === today.guesses.length
     const cells = [0, 1, 2, 3, 4].map(j => {
       if (g) return tile(s, g.word[j]!, { bg: MARK[g.marks[j]!], border: MARK[g.marks[j]!]! })
-      if (!isTyping) return tile(s, '', { border: GRAY })
+      if (!isTyping) return tile(s, '', { border: EMPTY })
       const ch = live.typed[j] ?? ''
 
-      return tile(s, ch, { border: flash ? 'red' : ch ? EDGE : GRAY, dim: live.props.isSending })
+      return tile(s, ch, { border: flash ? 'red' : ch ? EDGE : EMPTY, dim: live.props.isSending })
     })
     rows.push(
-      <Box key={`row-${i}`} flexDirection="row" gap={1}>
+      <Box key={`row-${i}`} flexDirection="row" gap={gap}>
         {cells}
       </Box>,
     )
@@ -132,20 +137,20 @@ function grid(live: Live, s: Surf, today: Today) {
   return <Box flexDirection="column">{rows}</Box>
 }
 
-// One row per guess, for the finished screen and for short panes.
-function smallGrid(live: Live, s: Surf, today: Today) {
+// One row per guess, for the finished screen and for short panes. Cells touch so a guess reads as a word.
+function smallGrid(live: Live, s: Surf, today: Today, rowGap = 0) {
   const { Box, Text } = s.elements
   const flash = live.t < live.flashUntil
   const isPlaying = today.state === 'playing'
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" rowGap={rowGap}>
       {[0, 1, 2, 3, 4, 5].map(i => {
         const g = today.guesses[i]
         const isTyping = isPlaying && i === today.guesses.length
 
         return (
-          <Box key={`row-${i}`} flexDirection="row" gap={1}>
+          <Box key={`row-${i}`} flexDirection="row">
             {[0, 1, 2, 3, 4].map(j => {
               if (g) return <Text bold color="white" backgroundColor={MARK[g.marks[j]!]}>{` ${g.word[j]!.toUpperCase()} `}</Text>
               const ch = isTyping ? (live.typed[j] ?? '') : ''
@@ -208,7 +213,7 @@ function statsBlock(s: Surf, today: Today, stats: Stats | null) {
       {stats.distribution.map((n, i) => (
         <Box flexDirection="row" gap={1}>
           <Text>{String(i + 1)}</Text>
-          <Text color={i === winRow ? GREEN : GRAY}>{'█'.repeat(Math.max(1, Math.round((n / most) * BAR_W)))}</Text>
+          {n > 0 ? <Text color={i === winRow ? GREEN : GRAY}>{'█'.repeat(Math.max(1, Math.round((n / most) * BAR_W)))}</Text> : null}
           <Text>{String(n)}</Text>
         </Box>
       ))}
@@ -218,9 +223,9 @@ function statsBlock(s: Surf, today: Today, stats: Stats | null) {
 
 function boardLine(r: Board['rows'][number], period: Period) {
   const login = r.login.length > LOGIN_W ? r.login.slice(0, LOGIN_W - 1) + '~' : r.login
-  const score = period === 'today' ? r.guesses : r.points
+  const score = period === 'today' ? (r.guesses ?? 'X') : (r.points ?? '-')
 
-  return `${String(r.rank).padStart(3)}  ${login.padEnd(LOGIN_W)}  ${String(score ?? '-').padStart(7)}  ${String(r.played).padStart(6)}`
+  return `${String(r.rank).padStart(3)}  ${login.padEnd(LOGIN_W)}  ${String(score).padStart(7)}  ${String(r.played).padStart(6)}`
 }
 
 // `rows` is how many lines the board may take, tabs and column names included.
@@ -284,7 +289,8 @@ function draw(live: Live, s: Surf) {
   const noticeRows = notice ? 2 : 0
   // 0 before the first layout: the region is sized by the hooks, so draw the full screen.
   const room = s.rows > 0 ? s.rows : Infinity
-  const width = s.columns > 0 ? Math.min(WIDE, s.columns) : WIDE
+  const hasTiles = done && s.columns >= TILES_W && room >= TILES_ROWS
+  const width = hasTiles ? TILES_W : s.columns > 0 ? Math.min(WIDE, s.columns) : WIDE
   const header = (
     <Box flexDirection="row" justifyContent="space-between" width={done ? width : 41}>
       <Text bold>{`DAILY DIFF #${today.number}`}</Text>
@@ -311,6 +317,25 @@ function draw(live: Live, s: Surf) {
       </Box>
     )
   }
+  if (hasTiles) {
+    // Beside the tiles: stats, the board, share, and the gaps between them.
+    const fixed = 2 + (stats ? 8 : 1) + 1 + 2 + noticeRows
+
+    return (
+      <Box flexDirection="column" alignItems="center" gap={1}>
+        {header}
+        <Box flexDirection="row" gap={2} width={TILES_W}>
+          {grid(live, s, today, 0)}
+          <Box flexDirection="column" gap={1} width={RESULTS_W}>
+            {statsBlock(s, today, stats)}
+            {noticeLine}
+            {room - fixed >= 3 ? boardBlock(live, s, board, room - fixed) : null}
+            {shareLine(s, copied)}
+          </Box>
+        </Box>
+      </Box>
+    )
+  }
   // Short or narrow: the result, stats and share come first and the board gets what is left.
   if (room < DONE_ROWS + noticeRows || width < WIDE) {
     const fixed = 1 + 1 + (stats ? 1 : 0) + (notice ? 1 : 0) + 1
@@ -326,14 +351,15 @@ function draw(live: Live, s: Surf) {
       </Box>
     )
   }
-  // Header, the grid and stats (8), board, share, and the gaps between them.
-  const fixed = 1 + 8 + 1 + 3 + noticeRows
+  // Header, the grid and stats (8, or 11 with the grid's rows spaced), board, share, and the gaps between them.
+  const isSpaced = room >= DONE_ROWS + 3 + noticeRows
+  const fixed = 1 + (isSpaced ? 11 : 8) + 1 + 3 + noticeRows
 
   return (
     <Box flexDirection="column" alignItems="center" gap={1}>
       {header}
       <Box flexDirection="row" gap={2} width={WIDE}>
-        {smallGrid(live, s, today)}
+        {smallGrid(live, s, today, isSpaced ? 1 : 0)}
         {statsBlock(s, today, stats)}
       </Box>
       {noticeLine}
