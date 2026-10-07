@@ -62,7 +62,7 @@ export function stepsDue(p: Pace, at: number): number {
   return n
 }
 
-export type Upload = { kind: 'marathon' | 'battle'; key: string; steps: number; inputsLen: number; stream: number[] }
+export type Upload = { kind: 'marathon' | 'battle' | 'bot'; key: string; steps: number; inputsLen: number; stream: number[] }
 
 export function toUpload(kind: Upload['kind'], key: string, rec: Recorder): Upload | null {
   if (rec.steps < 1) return null

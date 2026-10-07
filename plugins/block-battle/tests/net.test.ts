@@ -121,7 +121,7 @@ test('the leaderboard keeps five rows a side and drops rows with missing fields'
   expect(board?.marathon.map(r => r.login)).toEqual(['p0', 'p1', 'p2', 'p3', 'p4'])
   expect(board?.wins).toEqual([{ login: 'a', wins: 2 }])
   expect(parseLeaderboard({ marathon: [] })).toBe(null)
-  expect(parseLeaderboard({ marathon: [], wins: [] })).toEqual({ marathon: [], wins: [] })
+  expect(parseLeaderboard({ marathon: [], wins: [] })).toEqual({ marathon: [], wins: [], bot: { easy: [], medium: [], hard: [] } })
 })
 
 test('what a Client posts is validated before it is acted on', () => {
@@ -245,4 +245,27 @@ test('parseMarathonStart', () => {
   expect(parseMarathonStart({ gameId: 'g 1', seed: 42 })).toBe(null)
   expect(parseMarathonStart({ gameId: 'g1', seed: -1 })).toBe(null)
   expect(parseMarathonStart({ gameId: 'g1', seed: 2 ** 32 })).toBe(null)
+})
+
+test('the leaderboard reads the bot field and tolerates its absence', () => {
+  const row = { login: 'ann', ms: 62_500, at: 5 }
+  const six = [row, row, row, row, row, row]
+  expect(parseLeaderboard({ marathon: [], wins: [], bot: { easy: [row, { login: 'x' }, { login: 'a b', ms: 1, at: 1 }], medium: 'junk', hard: six } })).toEqual({
+    marathon: [],
+    wins: [],
+    bot: { easy: [row], medium: [], hard: six.slice(0, 5) },
+  })
+  expect(parseLeaderboard({ marathon: [], wins: [], bot: 'junk' })?.bot).toEqual({ easy: [], medium: [], hard: [] })
+})
+
+test('parseClientMsg: bot carries a known level and a nonce', () => {
+  expect(parseClientMsg({ type: 'menu', choice: 'bot', level: 'hard', nonce: 4 })).toEqual({ type: 'menu', choice: 'bot', level: 'hard', nonce: 4 })
+  expect(parseClientMsg({ type: 'menu', choice: 'bot', level: 'nightmare', nonce: 4 })).toBe(null)
+  expect(parseClientMsg({ type: 'menu', choice: 'bot', level: 'easy' })).toBe(null)
+  expect(parseClientMsg({ type: 'menu', choice: 'bot', level: 'easy', nonce: -1 })).toBe(null)
+})
+
+test('parseClientMsg: bot log chunks are accepted like the others', () => {
+  const ok = { type: 'log', kind: 'bot', key: 'b1', steps: 10, inputsLen: 4, total: 4, at: 0, values: [0, 1, 3, 5] }
+  expect(parseClientMsg(ok)).toEqual(ok)
 })

@@ -38,6 +38,7 @@ const startView = (): GameView => ({
   battle: idleBattle(),
   servers: { home: OFFICIAL, last: null, active: OFFICIAL },
   marathon: null,
+  vsbot: null,
   uploaded: null,
 })
 

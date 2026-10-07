@@ -69,6 +69,7 @@ const emptyProps = (): GameView => ({
   battle: { status: 'idle', roomId: null, seed: 0, opponent: null, incoming: [], result: null },
   servers: { home: '', last: null, active: '' },
   marathon: null,
+  vsbot: null,
   uploaded: null,
 })
 
