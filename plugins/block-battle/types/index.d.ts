@@ -29,7 +29,6 @@ export type GameView = {
 export type Servers = {
   // The plugin's configured server, the official one unless the player changed the setting.
   home: string
-  isHomeOfficial: boolean
   last: string | null
   // Where Battle and the leaderboard talk to right now.
   active: string
