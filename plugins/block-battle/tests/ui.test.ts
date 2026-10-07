@@ -1348,6 +1348,34 @@ test('online counts from a search the player left are not shown', async ($: Engi
   expect(await shown(ui)).not.toContain('online')
 })
 
+test('online counts go as soon as a search fails, before its slow DELETE is answered', async ($: Engine, on: On) => {
+  const clock = mock.clock(on)
+  store(on, SIGNED_IN)
+  let gate = () => {}
+  let posts = 0
+  on('http.fetch', async (_$, e) => {
+    const method = e.init?.method ?? 'GET'
+    const path = new URL(e.url).pathname
+    if (path === '/v1/battle/queue' && method === 'DELETE') {
+      await new Promise<void>(r => (gate = r))
+      return { value: reply({}) }
+    }
+    if (path === '/v1/battle/queue' && method === 'POST')
+      return { value: ++posts === 1 ? reply({ status: 'waiting', online: { playing: 2, looking: 1 } }) : reply({ error: 'boom' }, 500) }
+    return { value: reply({}) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await startBattle(ui)
+  expect(await shown(ui)).toContain('3 online')
+  await clock.advance(1_500)
+  await ui.advance(48)
+  await ui.advance(48)
+  expect(await shown(ui)).not.toContain('online')
+  gate()
+  await ui.advance(48)
+  expect(await shown(ui)).toContain('boom')
+})
+
 // The first queue POST answers with a match and, if asked, it and the first DELETE wait for the test.
 function heldQueue(on: On, hold: { post: boolean; del: boolean }, later: unknown = MATCH.body) {
   store(on, SIGNED_IN)

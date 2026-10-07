@@ -357,6 +357,7 @@ async function resetBattle($: EngineInterface, isLeaving: boolean): Promise<numb
   rt.latest = { snapshot: '', isOver: false }
   rt.opponentLogin = ''
   rt.myLogin = ''
+  await setBattleIf($, gen, { online: null })
   if (isLeaving && wasQueueing) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
   if (!isLive(gen)) return null
   await setBattleIf($, gen, idleBattle())
@@ -385,6 +386,7 @@ async function pollQueue($: EngineInterface, startedAt: number, gen: number) {
     if (!r.ok) {
       if (r.status === 409) return
       const stopped = bump()
+      await setBattleIf($, stopped, { online: null })
       if (r.status !== 401 && r.status !== -1) await api($, 'DELETE', '/v1/battle/queue', undefined, base)
       await setBattleIf($, stopped, idleBattle())
       await setViewIf($, stopped, { notice: fail(r) })
