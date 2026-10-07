@@ -2,11 +2,11 @@
 
 Games to play inside [Claude Code](https://code.claude.com) while it works on something long. Real-time, online, against other people.
 
-They run as Claude Code mods, in the terminal and in the Code tab of Claude Desktop.
+They run as Claude Code mods.
 
 ## Install
 
-You need Claude Code 2.1.291 or later. Games work in the terminal and in the Code tab of Claude Desktop, in local sessions (not cloud ones).
+You need Claude Code 2.1.291 or later. Games show up in the terminal and in the Code tab of Claude Desktop. They don't show in cloud sessions, in the VS Code chat panel, or with `claude -p`.
 
 In a Claude Code session:
 
@@ -14,7 +14,7 @@ In a Claude Code session:
 /plugin install block-battle --marketplace jpo-oss/claude-games
 ```
 
-Claude Code shows what the game adds and asks where to install it. Pick "Install for you" to have it in every project.
+Claude Code shows what the game adds and asks where to install it. Pick "Install for you" to have it in every project on this machine. If the command doesn't show up right away, run `/reload-plugins` or start a new session.
 
 If you'd rather add the marketplace once and pick games from it:
 
@@ -49,7 +49,7 @@ A falling-block puzzle. Play solo Marathon, battle other players 1v1, and climb 
 
 Run `/cg-block-battle` and click the pane to start. Left and right move, down drops faster, space drops all the way. Up or x rotates, z rotates the other way, a flips, c holds. p pauses Marathon, q goes back to the menu, Esc leaves the pane.
 
-Marathon works offline. Battles and the leaderboard need a one-time GitHub sign-in: the game shows a code, you enter it at github.com/login/device, and that's it. The sign-in asks for no permissions, so the server only learns your public username. The game keeps a key for that server and never stores your GitHub token.
+Marathon works offline, but a game only counts for the leaderboard if you were signed in when it started. Otherwise it says "unranked" at the end. Battles and the leaderboard need a one-time GitHub sign-in: the game shows a code, you enter it at github.com/login/device, and that's it. The sign-in asks for no permissions, so the server only learns your public username. The game keeps a key for that server and never stores your GitHub token.
 
 To sign out of the server you're on:
 
