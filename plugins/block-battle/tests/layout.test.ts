@@ -44,7 +44,7 @@ async function screen(ui: Ui, size: SizeName): Promise<string[]> {
     // The dump clips here and a real terminal wraps, so check the content itself: the too-small
     // note on the game screens, the screen's own heading on the menus.
     const drawn = JSON.stringify(tree)
-    expect(['Too small for Block Battle', 'Marathon', 'BATTLE', 'MARATHON TOP'].some(word => drawn.includes(word))).toBe(true)
+    expect(['Too small for Block Battle', 'Marathon', 'BATTLE', 'MARATHON TOP', 'VS BOT', 'LEADERBOARD'].some(word => drawn.includes(word))).toBe(true)
   }
   const lines = flatten(tree, columns, rows)
   const out = [`+${'-'.repeat(columns)}+  region ${columns}x${rows}, drawn ${nat.w}x${nat.h}`]
@@ -66,6 +66,7 @@ async function drop(ui: Ui, n: number) {
 const emit = (name: string, lines: string[]) => console.log(`@@DUMP ${name}\n${lines.join('\n')}\n@@END`)
 
 const toLeaderboard = async (ui: Ui) => {
+  await ui.key({ key: 'down' })
   await ui.key({ key: 'down' })
   await ui.key({ key: 'down' })
   await ui.key({ key: 'return' })
@@ -97,6 +98,7 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     serve(on)
     const ui = await open($, size)
     await ui.key({ key: 'down' })
+    await ui.key({ key: 'down' })
     await ui.key({ key: 'return' })
     await ui.key({ key: 'return' })
     await ui.advance(48)
@@ -107,6 +109,7 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     mock.clock(on)
     serve(on)
     const ui = await open($, size)
+    await ui.key({ key: 'down' })
     await ui.key({ key: 'down' })
     await ui.key({ key: 'return' })
     await ui.advance(48)
@@ -136,5 +139,28 @@ for (const size of ['big', 'compact', 'mini', 'tiny'] as const) {
     await drop(ui, 16)
     await ui.advance(1_000)
     emit(`${size}-gameover`, await screen(ui, size))
+  })
+
+  test(`${size}: the level picker fits`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on)
+    const ui = await open($, size)
+    await ui.key({ key: 'down' })
+    await ui.key({ key: 'return' })
+    await ui.advance(48)
+    emit(`${size}-levels`, await screen(ui, size))
+  })
+
+  test(`${size}: a vs bot match fits`, async ($: Engine, on: On) => {
+    mock.clock(on)
+    serve(on)
+    const ui = await open($, size)
+    await ui.key({ key: 'down' })
+    await ui.key({ key: 'return' })
+    await ui.key({ key: 'return' })
+    await ui.advance(100)
+    await ui.advance(16)
+    await drop(ui, 3)
+    emit(`${size}-vsbot`, await screen(ui, size))
   })
 }
