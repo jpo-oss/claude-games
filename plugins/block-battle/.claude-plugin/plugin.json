@@ -1,6 +1,6 @@
 {
   "name": "block-battle",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Falling-block puzzle inside Claude Code: solo Marathon, a bot to beat, 1v1 battles and a leaderboard while a long task runs",
   "author": { "name": "JustPressOne Inc." },
   "license": "MIT",
