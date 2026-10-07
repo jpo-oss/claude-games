@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, HttpInit, Register, Timer } from 'claude-code'
 
-import type { Battle, ClientMsg, GameView } from '../types'
+import type { Battle, BotLevel, ClientMsg, GameView } from '../types'
 import { parseConfig, parseSession, pollToken, requestDeviceCode, sessionKey } from './auth'
 import type { Session } from './auth'
 import { OPP_COLUMNS, TIERS } from './draw'
@@ -90,9 +90,10 @@ const rt: {
   nudge: Timer | null
   isTurnOn: boolean
   wasNudged: boolean
-  // Logs are only taken for marathon game ids the server handed out and rooms we were matched in,
+  // Logs are only taken for marathon and bot game ids the server handed out and rooms we were matched in,
   // and go to the server that handed them out.
   games: Owned[]
+  botGames: Owned[]
   rooms: Owned[]
   asm: Assembly | null
   sentKeys: string[]
@@ -120,6 +121,7 @@ const rt: {
   isTurnOn: false,
   wasNudged: false,
   games: [],
+  botGames: [],
   rooms: [],
   asm: null,
   sentKeys: [],
@@ -522,6 +524,38 @@ async function startMarathon($: EngineInterface, nonce: number) {
   await setViewIf($, gen, { marathon: { nonce, gameId, seed } })
 }
 
+// A ranked game nobody will play still holds one of the 5 open games until it is sent.
+function closeBotGame($: EngineInterface, base: string, gameId: string) {
+  rt.sentKeys = [...rt.sentKeys, gameId].slice(-8)
+
+  return sendLog($, base, '/v1/bot/scores', { gameId, log: { steps: 1, inputs: [] } }, 3, 5_000)
+}
+
+async function startBot($: EngineInterface, level: BotLevel, nonce: number) {
+  const gen = await resetBattle($, true)
+  if (gen === null) return
+  await setViewIf($, gen, { notice: null })
+  if (!isLive(gen)) return
+  // Room for both boards; a width the person dragged still wins.
+  $.ui.open({ id: PANE, title: 'Block Battle', columns: TIERS.big.columns + OPP_COLUMNS + 1, rows: 46 }).catch(() => undefined)
+  let gameId: string | null = null
+  let seed = 0
+  const base = rt.base
+  const isSignedIn = serverUrlOk(base) && (await loadSession($, base)) !== null
+  if (!isLive(gen)) return
+  if (isSignedIn) {
+    const r = await api($, 'POST', '/v1/bot', { level }, base)
+    const g = r.ok ? parseMarathonStart(r.data) : null
+    if (g && !isLive(gen)) return void closeBotGame($, base, g.gameId)
+    if (!isLive(gen)) return
+    if (g) {
+      ;({ gameId, seed } = g)
+      rt.botGames = [...rt.botGames, { key: g.gameId, base }].slice(-8)
+    }
+  }
+  await setViewIf($, gen, { vsbot: { nonce, level, gameId, seed } })
+}
+
 // Retries only when the server could not answer (status 0) or said 503.
 async function sendLog($: EngineInterface, base: string, path: string, body: unknown, tries: number, waitMs: number): Promise<Reply<unknown>> {
   for (let i = 1; ; i++) {
@@ -532,21 +566,23 @@ async function sendLog($: EngineInterface, base: string, path: string, body: unk
 }
 
 async function takeLog($: EngineInterface, m: LogMsg) {
-  const owner = (m.kind === 'marathon' ? rt.games : rt.rooms).find(o => o.key === m.key)
+  const owners = m.kind === 'marathon' ? rt.games : m.kind === 'bot' ? rt.botGames : rt.rooms
+  const owner = owners.find(o => o.key === m.key)
   if (!owner) return
   const r = takeChunk(rt.asm, m)
   rt.asm = r.asm
   await setView($, { uploaded: { key: m.key, have: r.have } })
   if (!r.log || rt.sentKeys.includes(m.key)) return
   rt.sentKeys = [...rt.sentKeys, m.key].slice(-8)
-  if (m.kind === 'marathon') {
-    const res = await sendLog($, owner.base, '/v1/scores', { gameId: m.key, log: r.log }, 3, 5_000)
-    const board = res.ok ? parseLeaderboard(res.data) : null
-    if (board && owner.base === rt.base) await setView($, { leaderboard: board })
-  } else {
+  if (m.kind === 'battle') {
     // The server waits 30 s for the winner's log.
     await sendLog($, owner.base, `/v1/battle/${encodeURIComponent(m.key)}/log`, { log: r.log }, 5, 3_000)
+    return
   }
+  const path = m.kind === 'marathon' ? '/v1/scores' : '/v1/bot/scores'
+  const res = await sendLog($, owner.base, path, { gameId: m.key, log: r.log }, 3, 5_000)
+  const board = res.ok ? parseLeaderboard(res.data) : null
+  if (board && owner.base === rt.base) await setView($, { leaderboard: board })
 }
 
 async function handle($: EngineInterface, m: ClientMsg) {
@@ -559,6 +595,7 @@ async function handle($: EngineInterface, m: ClientMsg) {
       return startQueue($)
     }
     if (m.choice === 'marathon') return startMarathon($, m.nonce)
+    if (m.choice === 'bot') return startBot($, m.level, m.nonce)
     await resetBattle($, true)
 
     return

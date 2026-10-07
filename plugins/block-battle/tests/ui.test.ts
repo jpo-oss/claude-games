@@ -462,7 +462,7 @@ test('after game over and the settled animation, r still restarts', async ($: En
   expect(await shown(ui)).not.toContain('GAME OVER')
 })
 
-const chunk = (key: string, kind: 'marathon' | 'battle', values: number[], inputsLen = values.length, steps = 50) =>
+const chunk = (key: string, kind: 'marathon' | 'battle' | 'bot', values: number[], inputsLen = values.length, steps = 50) =>
   ({ type: 'log', kind, key, steps, inputsLen, total: values.length, at: 0, values })
 
 const props = async (ui: Ui) => (await ui.find({ type: 'Client' }))?.props.props as Record<string, unknown>
@@ -1423,4 +1423,84 @@ test('a late 401 for an old session leaves a newer stored session alone', async 
   await ui.advance(48)
   await ui.advance(48)
   expect(saves.get('session:' + OFFICIAL_URL)).toEqual({ session: 'sess_2', login: 'alice' })
+})
+
+const BOT_RANKED = (req: Seen) => {
+  if (req.url === '/v1/bot') return { status: 200, body: { gameId: 'b1', seed: 77 } }
+  return { status: 200, body: EMPTY_LEADERBOARD }
+}
+
+test('vs bot start asks the server for a game when signed in', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'hard', nonce: 1 })
+  await ui.advance(48)
+  expect(seen.filter(r => r.url.endsWith('/v1/bot')).map(r => r.body)).toEqual([{ level: 'hard' }])
+  expect((await props(ui)).vsbot).toEqual({ nonce: 1, level: 'hard', gameId: 'b1', seed: 77 })
+})
+
+test('vs bot start signed out sends nothing and answers unranked', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED, {})
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'easy', nonce: 2 })
+  await ui.advance(48)
+  expect(seen).toHaveLength(0)
+  expect((await props(ui)).vsbot).toEqual({ nonce: 2, level: 'easy', gameId: null, seed: 0 })
+})
+
+test('vs bot start against a server without the route answers unranked', async ($: Engine, on: On) => {
+  mock.clock(on)
+  serve(on, req => (req.url === '/v1/bot' ? { status: 404, body: { error: 'not found' } } : { status: 200, body: EMPTY_LEADERBOARD }))
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'medium', nonce: 3 })
+  await ui.advance(48)
+  expect((await props(ui)).vsbot).toEqual({ nonce: 3, level: 'medium', gameId: null, seed: 0 })
+})
+
+test('a finished bot log goes to /v1/bot/scores once', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'easy', nonce: 1 })
+  await ui.advance(48)
+  await ui.post(chunk('b1', 'bot', [3, 5, 10, 0]))
+  await ui.advance(48)
+  await ui.post(chunk('b1', 'bot', [3, 5, 10, 0]))
+  await ui.advance(48)
+  const posts = seen.filter(r => r.url.endsWith('/v1/bot/scores'))
+  expect(posts.map(r => r.body)).toEqual([{ gameId: 'b1', log: { steps: 50, inputs: [3, 5, 10, 0] } }])
+  expect(seen.some(r => r.url.endsWith('/v1/scores'))).toBe(false)
+})
+
+test('a bot log for a game this session never started is dropped', async ($: Engine, on: On) => {
+  mock.clock(on)
+  const seen = serve(on, BOT_RANKED)
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post(chunk('stranger', 'bot', [3, 5]))
+  await ui.advance(48)
+  expect(seen.filter(r => r.url.endsWith('/v1/bot/scores'))).toHaveLength(0)
+})
+
+test('a ranked bot game left on the Starting screen is closed on the server', async ($: Engine, on: On) => {
+  mock.clock(on)
+  store(on, SIGNED_IN)
+  let release = () => undefined as void
+  const bodies: unknown[] = []
+  on('http.fetch', async (_$, e) => {
+    const path = new URL(e.url).pathname
+    if (path === '/v1/bot/scores') bodies.push(JSON.parse(e.init!.body!))
+    if (path === '/v1/bot') await new Promise<void>(r => (release = r))
+    return { value: reply(path === '/v1/bot' ? { gameId: 'b9', seed: 3 } : EMPTY_LEADERBOARD) }
+  })
+  const ui = await $.ui.mount(target('terminal'))
+  await ui.post({ type: 'menu', choice: 'bot', level: 'easy', nonce: 1 })
+  await ui.advance(16)
+  await ui.post({ type: 'menu', choice: 'back' })
+  await ui.advance(16)
+  release()
+  for (let i = 0; i < 5; i++) await ui.advance(48)
+  expect(bodies).toEqual([{ gameId: 'b9', log: { steps: 1, inputs: [] } }])
+  expect((await props(ui)).vsbot).toBe(null)
 })
