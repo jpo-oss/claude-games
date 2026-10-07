@@ -18,6 +18,17 @@
         "sha": "db4d9c3b167cf390a133f4b1c1be0df0d961f0d7"
       },
       "description": "Falling-block puzzle with solo Marathon, a bot to beat, 1v1 battles and a leaderboard"
+    },
+    {
+      "name": "daily-diff",
+      "source": {
+        "source": "git-subdir",
+        "url": "jpo-oss/claude-games",
+        "path": "plugins/daily-diff",
+        "ref": "daily-diff-v0.1.0",
+        "sha": "b4cbfd0e7820e6e288e3f97008b3fa1a24741bfa"
+      },
+      "description": "A daily five-letter coding word puzzle with streaks and a leaderboard"
     }
   ]
 }
