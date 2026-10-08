@@ -227,7 +227,7 @@ async function guess($: EngineInterface, word: string) {
   return fail($, gen, r)
 }
 
-async function board($: EngineInterface, period: Period) {
+async function showBoard($: EngineInterface, period: Period) {
   const gen = rt.gen
   rt.period = period
   const r = await send($, 'GET', `/v1/daily-diff/leaderboard/${period}`)
@@ -247,7 +247,7 @@ async function share($: EngineInterface, surface: RenderSurface) {
 
 function handle($: EngineInterface, m: ClientMsg, surface: RenderSurface) {
   if (m.type === 'guess') return guess($, m.word)
-  if (m.type === 'board') return board($, m.period)
+  if (m.type === 'board') return showBoard($, m.period)
   if (m.type === 'share') return share($, surface)
 
   return refresh($)
